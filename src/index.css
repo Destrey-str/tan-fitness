@@ -1,0 +1,140 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'PingFang SC', 'Hiragino Sans GB', 'Noto Sans SC',
+    'Microsoft YaHei', system-ui, sans-serif;
+
+  --color-navy: #1b4f72;
+  --color-navy-600: #154360;
+  --color-ink: #1c2833;
+  --color-paper: #f4f1ea;
+  --color-card: #fffcf7;
+  --color-line: #e4ddd2;
+  --color-muted: #6d655b;
+  --color-weight: #5b9bd5;
+  --color-waist: #ed7d31;
+  --color-deficit: #548235;
+  --color-surplus: #c0392b;
+  --color-band: #7f8c8d;
+}
+
+:root {
+  color-scheme: light dark;
+  --bg: #f4f1ea;
+  --fg: #1c2833;
+  --card: #fffcf7;
+  --muted: #6d655b;
+  --line: #e4ddd2;
+  --navy: #1b4f72;
+  --header: #1b4f72;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #12161c;
+    --fg: #e8eef4;
+    --card: #1c232c;
+    --muted: #9aa5b1;
+    --line: #2c3540;
+    --navy: #5dade2;
+    --header: #1b4f72;
+  }
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  min-height: 100dvh;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+#root {
+  max-width: 520px;
+  margin: 0 auto;
+  min-height: 100dvh;
+  background: var(--bg);
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.sheet-table {
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.sheet-table th {
+  background: #1b4f72;
+  color: #fff;
+  font-weight: 600;
+  padding: 8px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  border-right: 1px solid #2e6a93;
+}
+
+.sheet-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  border-right: 1px solid var(--line);
+  background: var(--card);
+}
+
+.sheet-table tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--card) 88%, var(--navy) 12%);
+}
+
+.sheet-table th:first-child,
+.sheet-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  font-weight: 600;
+}
+
+.sheet-table th:first-child {
+  z-index: 3;
+}
+
+.sheet-table tbody tr.active td {
+  background: color-mix(in srgb, #5b9bd5 22%, var(--card));
+}
+
+@keyframes rest-pulse {
+  0%,
+  100% {
+    filter: brightness(1);
+  }
+  50% {
+    filter: brightness(1.35);
+  }
+}
+
+.rest-done-flash {
+  animation: rest-pulse 0.7s ease-in-out 3;
+}
+
+.mark-yes {
+  color: #1e8449;
+  font-weight: 700;
+}
+
+.mark-no {
+  color: #c0392b;
+  font-weight: 700;
+}
