@@ -115,18 +115,16 @@ select {
   background: color-mix(in srgb, #5b9bd5 22%, var(--card));
 }
 
-@keyframes rest-pulse {
-  0%,
-  100% {
-    filter: brightness(1);
-  }
-  50% {
-    filter: brightness(1.35);
-  }
-}
-
-.rest-done-flash {
-  animation: rest-pulse 0.7s ease-in-out 3;
+.rest-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  height: 100vh;
+  height: 100lvh;
+  max-height: 100lvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: manipulation;
 }
 
 .mark-yes {

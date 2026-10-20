@@ -1,9 +1,11 @@
-import { asFiniteNumber, asInt, asIsoTime, asString, asNonNeg, clampInt } from '@/lib/coerce'
+import { asFiniteNumber, asInt, asIsoTime, asString, asNonNeg, clampInt, timeMs } from '@/lib/coerce'
+import { formatMd } from '@/lib/dates'
 import type {
   ExerciseSession,
   ExerciseTemplate,
   SetLog,
   TemplateId,
+  WeightMemoryEntry,
   WorkoutSession,
   WorkoutStore,
   WorkoutTemplate,
@@ -278,30 +280,185 @@ export function parseWeightNote(note?: string): number | undefined {
 }
 
 export function lastRecordedWeight(ex: ExerciseSession): number | undefined {
-  const logs = ex.setLogs ?? []
-  for (let i = logs.length - 1; i >= 0; i--) {
-    const kg = logs[i]?.weightKg
-    if (typeof kg === 'number' && Number.isFinite(kg) && kg >= 0) return kg
+  const weights = setWeightsOf(ex)
+  for (let i = weights.length - 1; i >= 0; i--) {
+    if (typeof weights[i] === 'number') return weights[i]
   }
   return parseWeightNote(ex.weightNote)
+}
+
+/** Logged weight for each set. Missing sets stay undefined. Also reads a legacy note. */
+export function setWeightsOf(ex: ExerciseSession): (number | undefined)[] {
+  const logs = ex.setLogs ?? []
+  const limit = Math.max(logs.length, asInt(ex.setsDone) ?? 0)
+  const out: (number | undefined)[] = []
+  for (let i = 0; i < limit; i++) {
+    out.push(weightFromUnknown(logs[i]?.weightKg))
+  }
+  if (!out.some((n) => typeof n === 'number')) {
+    const note = parseWeightNote(ex.weightNote)
+    if (note != null) return [note]
+  }
+  return out
+}
+
+export type LastPerformance = {
+  exerciseId: string
+  name: string
+  kg: number
+  setWeights: (number | undefined)[]
+  repsMin: number
+  repsMax?: number
+  date: string
+  completedAt: string
+  hint: string
+}
+
+export function formatLastPerformanceHint(opts: {
+  setWeights: (number | undefined)[]
+  repsMin: number
+  repsMax?: number
+  date: string
+}): string | undefined {
+  const nums = opts.setWeights.filter((n): n is number => typeof n === 'number')
+  if (nums.length === 0) return undefined
+  const distinct = new Set(nums.map((n) => formatKgCompact(n)))
+  const weightText =
+    distinct.size <= 1 ? formatKg(nums[0]!) : `${nums.map((n) => formatKgCompact(n)).join('/')}kg`
+  const reps = repsLabel(opts.repsMin, opts.repsMax)
+  const day = /^\d{4}-\d{2}-\d{2}$/.test(opts.date) ? formatMd(opts.date) : ''
+  return day ? `上次: ${weightText} × ${reps} (${day})` : `上次: ${weightText} × ${reps}`
+}
+
+function historyStamp(session: WorkoutSession): string {
+  return session.completedAt || session.updatedAt || session.startedAt || `${session.date}T00:00:00.000Z`
+}
+
+function sessionHasWeight(session: WorkoutSession): boolean {
+  return (session.exercises ?? []).some((ex) => ex && !ex.isWarmup && lastRecordedWeight(ex) != null)
+}
+
+export function indexLastPerformances(
+  sessions: WorkoutSession[] | undefined,
+  activeSessionId?: string,
+): { byId: Map<string, LastPerformance>; byName: Map<string, LastPerformance> } {
+  const byId = new Map<string, LastPerformance>()
+  const byName = new Map<string, LastPerformance>()
+  const list = [...(sessions ?? [])]
+    .filter((s) => s && s.id !== activeSessionId && sessionHasWeight(s))
+    .sort((a, b) => historyStamp(b).localeCompare(historyStamp(a)))
+  for (const session of list) {
+    for (const ex of session.exercises ?? []) {
+      if (!ex || ex.isWarmup) continue
+      const setWeights = setWeightsOf(ex)
+      const hint = formatLastPerformanceHint({
+        setWeights,
+        repsMin: ex.repsMin,
+        repsMax: ex.repsMax,
+        date: session.date,
+      })
+      const kg = setWeights.find((n): n is number => typeof n === 'number')
+      if (kg == null || !hint) continue
+      const perf: LastPerformance = {
+        exerciseId: ex.exerciseId,
+        name: ex.name,
+        kg,
+        setWeights,
+        repsMin: ex.repsMin,
+        repsMax: ex.repsMax,
+        date: session.date,
+        completedAt: historyStamp(session),
+        hint,
+      }
+      if (ex.exerciseId && !byId.has(ex.exerciseId)) byId.set(ex.exerciseId, perf)
+      const name = ex.name.trim()
+      if (name && !byName.has(name)) byName.set(name, perf)
+    }
+  }
+  return { byId, byName }
+}
+
+export function lookupLastPerformance(
+  index: { byId: Map<string, LastPerformance>; byName: Map<string, LastPerformance> },
+  exerciseId: string,
+  name: string,
+): LastPerformance | undefined {
+  return index.byId.get(exerciseId) ?? index.byName.get(name.trim())
 }
 
 export function lastWeightsFromHistory(
   sessions: WorkoutSession[],
 ): Map<string, { kg: number; hint: string }> {
+  const { byId } = indexLastPerformances(sessions)
   const map = new Map<string, { kg: number; hint: string }>()
-  const completed = [...(sessions ?? [])]
-    .filter((s) => s?.completedAt)
-    .sort((a, b) => (b.completedAt ?? '').localeCompare(a.completedAt ?? ''))
-  for (const session of completed) {
-    for (const ex of session.exercises ?? []) {
-      if (!ex || ex.isWarmup || map.has(ex.exerciseId)) continue
-      const kg = lastRecordedWeight(ex)
-      if (kg == null) continue
-      map.set(ex.exerciseId, { kg, hint: `上次 ${formatKg(kg)}` })
-    }
-  }
+  for (const [id, perf] of byId) map.set(id, { kg: perf.kg, hint: perf.hint })
   return map
+}
+
+export function lookupWeightMemory(
+  memory: WeightMemoryEntry[] | undefined,
+  exerciseId: string,
+  name: string,
+): WeightMemoryEntry | undefined {
+  const byId = memory?.find((entry) => entry.exerciseId === exerciseId)
+  if (byId) return byId
+  const trimmed = name.trim()
+  return memory?.find((entry) => entry.name.trim() === trimmed)
+}
+
+/** History wins unless the user typed a weight more recently. Later sets inherit the previous number. */
+export function resolvePlannedWeights(opts: {
+  setCount: number
+  history?: LastPerformance
+  memory?: WeightMemoryEntry
+}): { weights: (number | undefined)[]; hint?: string } {
+  const setCount = Math.max(0, opts.setCount)
+  const historyTime = opts.history?.completedAt ?? ''
+  const memoryNewer = Boolean(
+    opts.memory && (!opts.history || timeMs(opts.memory.updatedAt) > timeMs(historyTime)),
+  )
+  const source = memoryNewer ? opts.memory?.weights : opts.history?.setWeights
+  let carry: number | undefined
+  const weights: (number | undefined)[] = []
+  for (let i = 0; i < setCount; i++) {
+    const raw = source?.[i]
+    const n = typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
+    if (n != null) carry = n
+    weights.push(carry)
+  }
+  return { weights, hint: opts.history?.hint }
+}
+
+export function nextUnfinishedExerciseIndex(
+  exercises: ExerciseSession[] | undefined,
+  fromIndex: number,
+): number | undefined {
+  const list = exercises ?? []
+  const n = list.length
+  if (n === 0) return undefined
+  for (let step = 1; step <= n; step += 1) {
+    const i = (((fromIndex + step) % n) + n) % n
+    const ex = list[i]
+    if (ex && (asInt(ex.setsDone) ?? 0) < (asInt(ex.targetSets) ?? 1)) return i
+  }
+  return undefined
+}
+
+export function restDisplaySecond(restEndsAt: number, now: number): number {
+  return Math.ceil(Math.max(0, restEndsAt - now) / 1000)
+}
+
+/** True only when the countdown second or the skip-lock changes, so the rest screen does not repaint every tick. */
+export function restClockChanged(
+  prevNow: number,
+  nextNow: number,
+  restEndsAt: number,
+  lockUntil?: number,
+): boolean {
+  if (restDisplaySecond(restEndsAt, prevNow) !== restDisplaySecond(restEndsAt, nextNow)) return true
+  const prevLocked = lockUntil != null && prevNow < lockUntil
+  const nextLocked = lockUntil != null && nextNow < lockUntil
+  return prevLocked !== nextLocked
 }
 
 export function formatSetWeights(ex: ExerciseSession): string | undefined {
@@ -338,6 +495,7 @@ export function hydrateWorkout(raw?: Partial<WorkoutStore> | null): WorkoutStore
     activeSessionId: sessions.some((s) => s.id === activeSessionId)
       ? activeSessionId
       : undefined,
+    weightMemory: hydrateWeightMemory((raw as Record<string, unknown>).weightMemory),
   }
 }
 
@@ -388,9 +546,21 @@ function hydrateExerciseTemplate(raw: unknown): ExerciseTemplate | null {
   }
 }
 
+function weightFromUnknown(value: unknown): number | undefined {
+  const direct = asNonNeg(value)
+  if (direct != null) return direct
+  if (typeof value !== 'string') return undefined
+  const match = value.replace(/，/g, '.').match(/(\d+(?:\.\d+)?)/)
+  return match ? asNonNeg(match[1]) : undefined
+}
+
 function hydrateSetLog(raw: unknown): SetLog {
-  if (!raw || typeof raw !== 'object') return {}
-  const kg = asNonNeg((raw as Record<string, unknown>).weightKg)
+  if (raw == null) return {}
+  if (typeof raw !== 'object') {
+    const kg = weightFromUnknown(raw)
+    return kg == null ? {} : { weightKg: kg }
+  }
+  const kg = weightFromUnknown((raw as Record<string, unknown>).weightKg)
   return kg == null ? {} : { weightKg: kg }
 }
 
@@ -404,7 +574,24 @@ function hydrateExerciseSession(raw: unknown): ExerciseSession | null {
   const setsDone = clampInt(row.setsDone, 0, 30, 0)
   const repsMax = asInt(row.repsMax)
   const nextWeightKg = asNonNeg(row.nextWeightKg)
-  const setLogs = Array.isArray(row.setLogs) ? row.setLogs.map(hydrateSetLog) : []
+  let setLogs = Array.isArray(row.setLogs) ? row.setLogs.map(hydrateSetLog) : []
+  if (setLogs.length === 0 && Array.isArray(row.weights)) {
+    setLogs = row.weights.map((item) => {
+      const kg = asNonNeg(item)
+      return kg == null ? {} : { weightKg: kg }
+    })
+  }
+  const legacyKg = asNonNeg(row.weightKg ?? row.weight)
+  const done = Math.min(setsDone, targetSets)
+  if (legacyKg != null && done > 0 && setLogs.every((log) => log.weightKg == null)) {
+    setLogs = Array.from({ length: done }, () => ({ weightKg: legacyKg }))
+  }
+  const plannedWeights = Array.isArray(row.plannedWeights)
+    ? row.plannedWeights.map((item) => {
+        const kg = asNonNeg(item)
+        return kg == null ? null : Math.round(kg * 100) / 100
+      })
+    : undefined
   return {
     exerciseId,
     name,
@@ -412,10 +599,11 @@ function hydrateExerciseSession(raw: unknown): ExerciseSession | null {
     repsMin: clampInt(row.repsMin, 1, 100, 1),
     repsMax: repsMax != null && repsMax > 0 ? Math.min(100, repsMax) : undefined,
     note: asString(row.note) || undefined,
-    setsDone: Math.min(setsDone, targetSets),
+    setsDone: done,
     weightNote: asString(row.weightNote) || undefined,
     setLogs,
     nextWeightKg,
+    plannedWeights,
     lastWeightHint: asString(row.lastWeightHint) || undefined,
     isWarmup: row.isWarmup === true,
   }
@@ -436,6 +624,12 @@ export function hydrateSession(value: unknown): WorkoutSession | null {
   const templateId = row.templateId
   const restRaw = asFiniteNumber(row.restSec) ?? 90
   const idx = clampInt(row.currentExerciseIndex, 0, Math.max(0, exercises.length - 1), 0)
+  const advanceRaw = asInt(row.restAdvanceFrom)
+  const setHistory = Array.isArray(row.setHistory)
+    ? row.setHistory
+        .map((item) => asInt(item))
+        .filter((item): item is number => item != null && item >= 0 && item < exercises.length)
+    : undefined
   return {
     id,
     date,
@@ -447,8 +641,36 @@ export function hydrateSession(value: unknown): WorkoutSession | null {
     currentExerciseIndex: idx,
     restEndsAt: asFiniteNumber(row.restEndsAt),
     restLockUntil: asFiniteNumber(row.restLockUntil),
+    restAdvanceFrom:
+      advanceRaw != null && advanceRaw >= 0 && advanceRaw < exercises.length ? advanceRaw : undefined,
+    setHistory: setHistory && setHistory.length > 0 ? setHistory : undefined,
     exercises,
     markedStrength: row.markedStrength === true,
     updatedAt: asIsoTime(row.updatedAt),
   }
+}
+
+function hydrateWeightMemory(raw: unknown): WeightMemoryEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const out: WeightMemoryEntry[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const row = item as Record<string, unknown>
+    const exerciseId = asString(row.exerciseId)
+    const name = asString(row.name)
+    if (!exerciseId || !name) continue
+    const weights = Array.isArray(row.weights)
+      ? row.weights.map((entry) => {
+          const kg = asNonNeg(entry)
+          return kg == null ? null : Math.round(kg * 100) / 100
+        })
+      : []
+    out.push({
+      exerciseId,
+      name,
+      weights,
+      updatedAt: asIsoTime(row.updatedAt) ?? new Date(0).toISOString(),
+    })
+  }
+  return out.length > 0 ? out : undefined
 }

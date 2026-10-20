@@ -12,7 +12,9 @@ import {
   writeToken,
 } from '@/lib/sync/config'
 import { createGithubGistClient, type GistClient } from '@/lib/sync/gist'
+import { mergeCloudData } from '@/lib/sync/merge'
 import { reconcileWithGist } from '@/lib/sync/roundtrip'
+import type { AppData } from '@/types'
 
 export type SyncState = 'idle' | 'syncing' | 'ok' | 'error' | 'offline' | 'disabled'
 
@@ -72,6 +74,12 @@ function client(): GistClient {
   return clientFactory(token)
 }
 
+/** Keep edits made while a pull was in flight, including the exercise the user just picked. */
+export function mergeSyncResult(snapshotAtStart: AppData, merged: AppData, current: AppData): AppData {
+  if (current === snapshotAtStart) return merged
+  return mergeCloudData(current, merged)
+}
+
 async function pullMergePush() {
   const token = readToken()
   const meta = readSyncMeta()
@@ -79,11 +87,12 @@ async function pullMergePush() {
   setStatus({ state: 'syncing', lastError: undefined })
   try {
     const api = client()
-    const result = await reconcileWithGist(getSnapshot(), api, meta.gistId)
+    const snapshotAtStart = getSnapshot()
+    const result = await reconcileWithGist(snapshotAtStart, api, meta.gistId)
     if (result.payload.includes(token)) {
       throw new Error('token leaked')
     }
-    applySyncedData(result.data)
+    applySyncedData(mergeSyncResult(snapshotAtStart, result.data, getSnapshot()))
     const at = nowIso()
     writeSyncMeta({
       gistId: result.gistId,

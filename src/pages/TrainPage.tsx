@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Dumbbell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardTitle } from '@/components/ui/card'
@@ -18,6 +19,7 @@ import {
   resetWorkoutTemplates,
   selectWorkoutExercise,
   setExerciseNextWeight,
+  setExerciseSeedWeights,
   setExerciseWeightNote,
   setRestDefault,
   setSessionRestSec,
@@ -30,8 +32,12 @@ import {
   formatKgCompact,
   formatRest,
   formatSetWeights,
-  lastWeightsFromHistory,
+  indexLastPerformances,
+  lookupLastPerformance,
+  lookupWeightMemory,
   repsLabel,
+  resolvePlannedWeights,
+  restClockChanged,
   sessionCompletedSets,
   sessionProgress,
   templateHasWarmup,
@@ -83,9 +89,9 @@ export function TrainPage({ date }: { date: string }) {
     [sessions],
   )
 
-  const lastWeights = useMemo(
-    () => lastWeightsFromHistory(sessions),
-    [sessions],
+  const performances = useMemo(
+    () => indexLastPerformances(sessions, workout?.activeSessionId),
+    [sessions, workout?.activeSessionId],
   )
 
   useEffect(() => {
@@ -148,15 +154,27 @@ export function TrainPage({ date }: { date: string }) {
             <div className="mb-3" />
           )}
           <ol className="flex flex-col gap-2">
-            {selected.exercises.map((ex, i) => (
-              <TemplateExerciseRow
-                key={ex.id}
-                ex={ex}
-                index={i}
-                section={listSectionLabel(selected.exercises, i)}
-                lastHint={ex.isWarmup ? undefined : lastWeights.get(ex.id)?.hint}
-              />
-            ))}
+            {selected.exercises.map((ex, i) => {
+              const past = ex.isWarmup
+                ? undefined
+                : lookupLastPerformance(performances, ex.id, ex.name)
+              const memory = ex.isWarmup
+                ? undefined
+                : lookupWeightMemory(workout?.weightMemory, ex.id, ex.name)
+              const planned = ex.isWarmup
+                ? undefined
+                : resolvePlannedWeights({ setCount: ex.sets, history: past, memory })
+              return (
+                <TemplateExerciseRow
+                  key={ex.id}
+                  ex={ex}
+                  index={i}
+                  section={listSectionLabel(selected.exercises, i)}
+                  lastHint={planned?.hint}
+                  weights={planned?.weights ?? []}
+                />
+              )
+            })}
           </ol>
         </Card>
       ) : null}
@@ -257,11 +275,13 @@ function TemplateExerciseRow({
   index,
   section,
   lastHint,
+  weights,
 }: {
   ex: ExerciseTemplate
   index: number
   section: 'warmup' | 'lifts' | null
   lastHint?: string
+  weights: (number | undefined)[]
 }) {
   return (
     <li>
@@ -284,14 +304,74 @@ function TemplateExerciseRow({
             <span className="mt-0.5 block text-[11px] text-[var(--muted)]">{ex.note}</span>
           ) : null}
           {lastHint ? (
-            <span className="mt-0.5 block text-[11px] text-navy">{lastHint}</span>
+            <span className="mt-0.5 block text-[13px] font-medium text-navy">{lastHint}</span>
           ) : null}
         </span>
         <span className="shrink-0 tabular-nums text-[var(--muted)]">
           {ex.isWarmup ? '勾选' : `${ex.sets}×${repsLabel(ex.repsMin, ex.repsMax)}`}
         </span>
       </div>
+      {!ex.isWarmup ? (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {Array.from({ length: ex.sets }, (_, setIndex) => (
+            <SeedWeightInput
+              key={setIndex}
+              caption={String(setIndex + 1)}
+              label={`${ex.name} 第${setIndex + 1}组`}
+              value={weights[setIndex]}
+              onCommit={(next) => {
+                const filled = Array.from({ length: ex.sets }, (_, i) => weights[i])
+                filled[setIndex] = next
+                setExerciseSeedWeights(ex.id, ex.name, filled)
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
     </li>
+  )
+}
+
+function SeedWeightInput({
+  caption,
+  label,
+  value,
+  onCommit,
+}: {
+  caption: string
+  label: string
+  value: number | undefined
+  onCommit: (next: number | undefined) => void
+}) {
+  const focused = useRef(false)
+  const [text, setText] = useState(value == null ? '' : String(value))
+  useEffect(() => {
+    if (!focused.current) setText(value == null ? '' : String(value))
+  }, [value])
+  return (
+    <label className="flex items-center gap-0.5 text-[11px] text-[var(--muted)]">
+      <span className="w-3 text-center tabular-nums">{caption}</span>
+      <input
+        aria-label={label}
+        inputMode="decimal"
+        enterKeyHint="done"
+        className="h-8 w-14 rounded-lg border border-[var(--line)] bg-[var(--card)] px-1 text-center text-sm tabular-nums text-[var(--fg)]"
+        value={text}
+        placeholder="kg"
+        onFocus={() => {
+          focused.current = true
+        }}
+        onChange={(e) => setText(e.target.value)}
+        onBlur={() => {
+          focused.current = false
+          const raw = text.trim().replace(/，/g, '.')
+          const parsed = raw === '' ? undefined : Number(raw)
+          const next = parsed != null && Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined
+          setText(next == null ? '' : String(next))
+          if (next !== value) onCommit(next)
+        }}
+      />
+    </label>
   )
 }
 
@@ -310,15 +390,58 @@ function restNextHint(session: WorkoutSession): string {
 function RestOverlay({ session }: { session: WorkoutSession }) {
   const [now, setNow] = useState(() => Date.now())
   const alerted = useRef(false)
-  const remainingMs = (session.restEndsAt ?? 0) - now
+  const endsAt = session.restEndsAt ?? 0
+  const remainingMs = endsAt - now
   const finished = remainingMs <= 0
   const skipLocked = Boolean(session.restLockUntil && now < session.restLockUntil)
   const canUndo = sessionCompletedSets(session) > 0
 
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), 200)
-    return () => window.clearInterval(id)
+    const html = document.documentElement
+    const body = document.body
+    const scrollY = window.scrollY
+    const prevHtmlOverflow = html.style.overflow
+    const prev = {
+      overflow: body.style.overflow,
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+    }
+    html.style.overflow = 'hidden'
+    body.style.overflow = 'hidden'
+    body.style.position = 'fixed'
+    body.style.top = `-${scrollY}px`
+    body.style.left = '0'
+    body.style.right = '0'
+    body.style.width = '100%'
+    const active = document.activeElement
+    if (active instanceof HTMLElement) active.blur()
+    return () => {
+      html.style.overflow = prevHtmlOverflow
+      body.style.overflow = prev.overflow
+      body.style.position = prev.position
+      body.style.top = prev.top
+      body.style.left = prev.left
+      body.style.right = prev.right
+      body.style.width = prev.width
+      window.scrollTo(0, scrollY)
+    }
   }, [])
+
+  useEffect(() => {
+    const ends = session.restEndsAt ?? 0
+    const lock = session.restLockUntil
+    let prev = Date.now()
+    const id = window.setInterval(() => {
+      const next = Date.now()
+      if (!restClockChanged(prev, next, ends, lock)) return
+      prev = next
+      setNow(next)
+    }, 200)
+    return () => window.clearInterval(id)
+  }, [session.restEndsAt, session.restLockUntil])
 
   useEffect(() => {
     if (!session.restEndsAt) {
@@ -329,23 +452,24 @@ function RestOverlay({ session }: { session: WorkoutSession }) {
       alerted.current = true
       restFinishedCue()
     }
-    if (!finished) alerted.current = false
   }, [finished, session.restEndsAt])
 
-  return (
+  if (typeof document === 'undefined') return null
+
+  return createPortal(
     <div
-      className={cn(
-        'fixed inset-x-0 top-0 z-40 mx-auto flex min-h-dvh max-w-[520px] flex-col justify-between px-5',
-        'bg-navy text-white',
-        finished && 'rest-done-flash',
-      )}
-      style={{
-        paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
-        paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
-      }}
+      className="rest-screen bg-navy text-white"
+      data-testid="rest-overlay"
       role="timer"
-      aria-live="polite"
+      aria-live="off"
     >
+      <div
+        className="mx-auto flex h-full w-full max-w-[520px] flex-col justify-between px-5"
+        style={{
+          paddingTop: 'max(1.5rem, env(safe-area-inset-top))',
+          paddingBottom: 'max(1.5rem, env(safe-area-inset-bottom))',
+        }}
+      >
       <div>
         <p className="text-sm font-medium text-white/80">
           {finished ? '休息结束' : '组间休息 · 已自动开始'}
@@ -366,6 +490,7 @@ function RestOverlay({ session }: { session: WorkoutSession }) {
       <div className="flex flex-1 flex-col items-center justify-center py-6">
         <p
           className="font-semibold tabular-nums tracking-wide"
+          data-testid="rest-clock"
           style={{ fontSize: finished ? '3.2rem' : '5.2rem', lineHeight: 1 }}
         >
           {finished ? '00:00' : formatRest(remainingMs / 1000)}
@@ -414,7 +539,9 @@ function RestOverlay({ session }: { session: WorkoutSession }) {
           </Button>
         </div>
       </div>
-    </div>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
@@ -445,6 +572,10 @@ function SessionView({
 
   return (
     <div className="flex flex-col gap-3 pb-6">
+      <div
+        className={cn('flex flex-col gap-3', resting && 'invisible')}
+        inert={resting ? true : undefined}
+      >
       <header className="flex items-start justify-between gap-2">
         <div>
           <p className="text-xs text-[var(--muted)]">
@@ -516,7 +647,7 @@ function SessionView({
             {current.isWarmup ? '热身' : '正式动作'} {session.currentExerciseIndex + 1}/
             {session.exercises.length}
           </p>
-          <h2 className="mt-0.5 text-lg font-semibold">
+          <h2 className="mt-0.5 text-lg font-semibold" data-testid="current-exercise">
             {current.name}
             {current.isWarmup ? (
               <Badge tone="info" className="ml-2 align-middle">
@@ -568,14 +699,13 @@ function SessionView({
               </div>
               <p className="mt-1 text-sm tabular-nums">
                 已完成 {current.setsDone}/{current.targetSets} 组
-                {current.lastWeightHint ? (
-                  <span className="ml-2 text-[11px] font-normal text-navy">
-                    {current.lastWeightHint}
-                  </span>
-                ) : null}
               </p>
+              {current.lastWeightHint ? (
+                <p className="mt-1 text-sm font-medium text-navy">{current.lastWeightHint}</p>
+              ) : null}
               {current.setsDone < current.targetSets ? (
                 <NumberField
+                  key={`${current.exerciseId}-${current.setsDone}`}
                   className="mt-3"
                   label={`第 ${current.setsDone + 1} 组重量`}
                   unit="kg"
@@ -601,8 +731,6 @@ function SessionView({
         </Card>
       ) : null}
 
-      {resting ? <RestOverlay session={session} /> : null}
-
       {!resting && !done ? (
         <div className="flex flex-col gap-2">
           <Button
@@ -612,6 +740,7 @@ function SessionView({
             onClick={() => {
               if (completeBusy.current || session.restEndsAt) return
               completeBusy.current = true
+              if (document.activeElement instanceof HTMLElement) document.activeElement.blur()
               unlockAudio()
               completeWorkoutSet(session.id)
               window.setTimeout(() => {
@@ -661,6 +790,8 @@ function SessionView({
           />
         </div>
       </Card>
+      </div>
+      {resting ? <RestOverlay session={session} /> : null}
     </div>
   )
 }
@@ -677,6 +808,7 @@ function SessionExerciseRow({
   onSelect: () => void
 }) {
   const checked = ex.setsDone >= ex.targetSets
+  const point = useRef<{ x: number; y: number } | null>(null)
   return (
     <li>
       {section === 'warmup' ? (
@@ -691,7 +823,21 @@ function SessionExerciseRow({
           'flex w-full items-center justify-between rounded-xl px-2 py-2 text-left text-sm',
           currentRow ? 'bg-navy/10' : '',
         )}
-        onClick={onSelect}
+        onPointerDown={(e) => {
+          if (e.button !== 0) return
+          point.current = { x: e.clientX, y: e.clientY }
+          e.currentTarget.setPointerCapture(e.pointerId)
+        }}
+        onPointerUp={(e) => {
+          const start = point.current
+          point.current = null
+          if (!start) return
+          if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 12) return
+          onSelect()
+        }}
+        onClick={(e) => {
+          if (e.detail === 0) onSelect()
+        }}
       >
         <span className={cn(checked && 'text-[var(--muted)]')}>
           {checked ? '✓ ' : ''}

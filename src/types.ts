@@ -16,6 +16,15 @@ export interface ExerciseTemplate {
   isWarmup?: boolean
 }
 
+/** Weights typed before a session starts, so the next workout can prefill them. */
+export interface WeightMemoryEntry {
+  exerciseId: string
+  name: string
+  /** Set 1 is index 0. Null means that set was left blank. */
+  weights: (number | null)[]
+  updatedAt: string
+}
+
 export interface WorkoutTemplate {
   id: TemplateId
   name: string
@@ -42,7 +51,9 @@ export interface ExerciseSession {
   setLogs?: SetLog[]
   /** Draft weight for the current / next set. */
   nextWeightKg?: number
-  /** Shown during the session, e.g. 上次 60kg. */
+  /** Per-set weights to offer, index 0 = set 1. Null keeps the box empty. */
+  plannedWeights?: (number | null)[]
+  /** Shown during the session, e.g. 上次: 40kg × 10 (10/17). */
   lastWeightHint?: string
   isWarmup?: boolean
 }
@@ -58,6 +69,13 @@ export interface WorkoutSession {
   currentExerciseIndex: number
   restEndsAt?: number
   restLockUntil?: number
+  /**
+   * Set when the current exercise just finished and rest should advance
+   * to the next unfinished exercise. Cleared if the user picks an exercise.
+   */
+  restAdvanceFrom?: number
+  /** Exercise indexes in the order sets were completed, for undo. */
+  setHistory?: number[]
   exercises: ExerciseSession[]
   markedStrength?: boolean
   updatedAt?: string
@@ -70,6 +88,7 @@ export interface WorkoutStore {
   templatesUpdatedAt?: string
   sessions: WorkoutSession[]
   activeSessionId?: string
+  weightMemory?: WeightMemoryEntry[]
 }
 
 export type ChartRange = 7 | 14 | 28 | 90

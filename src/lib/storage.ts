@@ -8,7 +8,16 @@ import {
   parseStoredPayload,
 } from '@/lib/hydrate'
 import { logHasData } from '@/lib/stats'
-import { clampRest, defaultWorkout, hydrateWorkout, lastWeightsFromHistory } from '@/lib/workout'
+import {
+  clampRest,
+  defaultWorkout,
+  hydrateWorkout,
+  indexLastPerformances,
+  lookupLastPerformance,
+  lookupWeightMemory,
+  nextUnfinishedExerciseIndex,
+  resolvePlannedWeights,
+} from '@/lib/workout'
 import {
   DATA_VERSION,
   DEFAULT_BMR_KCAL,
@@ -370,11 +379,18 @@ function setWorkout(next: ReturnType<typeof currentWorkout>) {
 function cloneSession(session: WorkoutSession): WorkoutSession {
   return {
     ...session,
+    setHistory: session.setHistory?.slice(),
     exercises: session.exercises.map((e) => ({
       ...e,
       setLogs: e.setLogs?.map((log) => ({ ...log })),
+      plannedWeights: e.plannedWeights?.slice(),
     })),
   }
+}
+
+function roundWeight(weightKg: number | undefined): number | undefined {
+  if (typeof weightKg !== 'number' || !Number.isFinite(weightKg) || weightKg < 0) return undefined
+  return Math.round(weightKg * 100) / 100
 }
 
 export function setRestDefault(sec: number) {
@@ -386,7 +402,7 @@ export function startWorkoutSession(date: string, templateId: TemplateId, restSe
   const w = currentWorkout()
   const template = w.templates.find((t) => t.id === templateId) ?? defaultWorkout().templates.find((t) => t.id === templateId)
   if (!template) return
-  const lastWeights = lastWeightsFromHistory(w.sessions)
+  const history = indexLastPerformances(w.sessions, w.activeSessionId)
   const session: WorkoutSession = {
     id: crypto.randomUUID(),
     date,
@@ -397,7 +413,12 @@ export function startWorkoutSession(date: string, templateId: TemplateId, restSe
     currentExerciseIndex: 0,
     updatedAt: nowIso(),
     exercises: template.exercises.map((e) => {
-      const prev = e.isWarmup ? undefined : lastWeights.get(e.id)
+      const past = e.isWarmup ? undefined : lookupLastPerformance(history, e.id, e.name)
+      const memory = e.isWarmup ? undefined : lookupWeightMemory(w.weightMemory, e.id, e.name)
+      const planned = e.isWarmup
+        ? undefined
+        : resolvePlannedWeights({ setCount: e.sets, history: past, memory })
+      const first = planned?.weights[0]
       return {
         exerciseId: e.id,
         name: e.name,
@@ -408,8 +429,9 @@ export function startWorkoutSession(date: string, templateId: TemplateId, restSe
         setsDone: 0,
         isWarmup: e.isWarmup,
         setLogs: [],
-        nextWeightKg: prev?.kg,
-        lastWeightHint: prev?.hint,
+        plannedWeights: planned?.weights.map((n) => (typeof n === 'number' ? n : null)),
+        nextWeightKg: typeof first === 'number' ? first : undefined,
+        lastWeightHint: planned?.hint,
       }
     }),
   }
@@ -435,30 +457,39 @@ export function completeWorkoutSet(sessionId: string) {
   const ex = next.exercises[idx]
   if (!ex || ex.setsDone >= ex.targetSets) return
   completeLockUntil.set(sessionId, now + 500)
+  const loggedKg = typeof ex.nextWeightKg === 'number' ? ex.nextWeightKg : undefined
   if (!ex.isWarmup) {
     const logs = [...(ex.setLogs ?? [])]
     logs.push({
-      weightKg: typeof ex.nextWeightKg === 'number' ? ex.nextWeightKg : undefined,
+      weightKg: loggedKg,
     })
     ex.setLogs = logs
   }
   ex.setsDone += 1
+  next.setHistory = [...(next.setHistory ?? []), idx]
   const allDone = next.exercises.every((e) => e.setsDone >= e.targetSets)
+  const exerciseDone = ex.setsDone >= ex.targetSets
   if (allDone) {
     next.restEndsAt = undefined
     next.restLockUntil = undefined
+    next.restAdvanceFrom = undefined
   } else if (ex.isWarmup) {
     next.restEndsAt = undefined
     next.restLockUntil = undefined
-    if (
-      ex.setsDone >= ex.targetSets &&
-      next.currentExerciseIndex < next.exercises.length - 1
-    ) {
-      next.currentExerciseIndex += 1
+    next.restAdvanceFrom = undefined
+    if (exerciseDone) {
+      const nxt = nextUnfinishedExerciseIndex(next.exercises, idx)
+      if (nxt != null) next.currentExerciseIndex = nxt
     }
   } else {
     next.restEndsAt = now + next.restSec * 1000
     next.restLockUntil = now + 500
+    next.restAdvanceFrom = exerciseDone ? idx : undefined
+    if (!exerciseDone) {
+      const planned = ex.plannedWeights?.[ex.setsDone]
+      if (typeof planned === 'number') ex.nextWeightKg = planned
+      else if (typeof loggedKg === 'number') ex.nextWeightKg = loggedKg
+    }
   }
   next.updatedAt = nowIso()
   setWorkout({
@@ -470,19 +501,18 @@ export function completeWorkoutSet(sessionId: string) {
 export function endWorkoutRest(sessionId: string) {
   const w = currentWorkout()
   const session = w.sessions.find((s) => s.id === sessionId)
-  if (!session) return
+  if (!session || session.restEndsAt == null) return
   if (session.restLockUntil && Date.now() < session.restLockUntil) return
   patchWorkoutSession(sessionId, (s) => {
+    const advanceFrom = s.restAdvanceFrom
     s.restEndsAt = undefined
     s.restLockUntil = undefined
+    s.restAdvanceFrom = undefined
+    if (advanceFrom == null || s.currentExerciseIndex !== advanceFrom) return
     const ex = s.exercises[s.currentExerciseIndex]
-    if (
-      ex &&
-      ex.setsDone >= ex.targetSets &&
-      s.currentExerciseIndex < s.exercises.length - 1
-    ) {
-      s.currentExerciseIndex += 1
-    }
+    if (!ex || ex.setsDone < ex.targetSets) return
+    const nxt = nextUnfinishedExerciseIndex(s.exercises, s.currentExerciseIndex)
+    if (nxt != null) s.currentExerciseIndex = nxt
   })
 }
 
@@ -493,23 +523,28 @@ export function undoLastWorkoutSet(sessionId: string) {
   const next = cloneSession(session)
   next.restEndsAt = undefined
   next.restLockUntil = undefined
+  next.restAdvanceFrom = undefined
+  const hist = next.setHistory ?? []
   let idx = next.currentExerciseIndex
+  if (hist.length > 0) {
+    idx = hist[hist.length - 1]!
+    next.setHistory = hist.slice(0, -1)
+  }
   let ex = next.exercises[idx]
   if (!ex) return
   if (ex.setsDone <= 0) {
+    if (hist.length > 0) return
     if (idx <= 0) return
     idx -= 1
-    next.currentExerciseIndex = idx
     ex = next.exercises[idx]
     if (!ex || ex.setsDone <= 0) return
   }
+  next.currentExerciseIndex = idx
   ex.setsDone -= 1
   if (ex.setLogs && ex.setLogs.length > 0) {
     const undone = ex.setLogs[ex.setLogs.length - 1]
     ex.setLogs = ex.setLogs.slice(0, -1)
-    if (typeof undone?.weightKg === 'number') {
-      ex.nextWeightKg = undone.weightKg
-    }
+    ex.nextWeightKg = typeof undone?.weightKg === 'number' ? undone.weightKg : undefined
   }
   completeLockUntil.delete(sessionId)
   next.updatedAt = nowIso()
@@ -555,22 +590,65 @@ export function setExerciseNextWeight(
   exerciseId: string,
   weightKg: number | undefined,
 ) {
+  const w = currentWorkout()
+  const session = w.sessions.find((s) => s.id === sessionId)
+  const ex = session?.exercises.find((e) => e.exerciseId === exerciseId)
+  if (!session || !ex || ex.isWarmup) return
+  const nextKg = roundWeight(weightKg)
+  if (ex.nextWeightKg === nextKg) return
   patchWorkoutSession(sessionId, (s) => {
-    const ex = s.exercises.find((e) => e.exerciseId === exerciseId)
-    if (!ex || ex.isWarmup) return
-    ex.nextWeightKg =
-      typeof weightKg === 'number' && Number.isFinite(weightKg) && weightKg >= 0
-        ? Math.round(weightKg * 100) / 100
-        : undefined
+    const target = s.exercises.find((e) => e.exerciseId === exerciseId)
+    if (!target || target.isWarmup) return
+    target.nextWeightKg = nextKg
   })
 }
 
+export function setExerciseSeedWeights(
+  exerciseId: string,
+  name: string,
+  weights: (number | undefined | null)[],
+) {
+  const cleaned = weights.map((n) => roundWeight(typeof n === 'number' ? n : undefined) ?? null)
+  const w = currentWorkout()
+  const memory = [...(w.weightMemory ?? [])]
+  const idx = memory.findIndex((entry) => entry.exerciseId === exerciseId)
+  const prev = idx >= 0 ? memory[idx] : undefined
+  if (
+    prev &&
+    prev.name === name &&
+    prev.weights.length === cleaned.length &&
+    prev.weights.every((n, i) => n === cleaned[i])
+  ) {
+    return
+  }
+  const entry = {
+    exerciseId,
+    name,
+    weights: cleaned,
+    updatedAt: nowIso(),
+  }
+  if (idx >= 0) memory[idx] = entry
+  else memory.push(entry)
+  setWorkout({ ...w, weightMemory: memory })
+}
+
 export function selectWorkoutExercise(sessionId: string, index: number) {
+  const w = currentWorkout()
+  const session = w.sessions.find((s) => s.id === sessionId)
+  if (!session || session.completedAt) return
+  if (
+    index === session.currentExerciseIndex &&
+    session.restEndsAt == null &&
+    session.restAdvanceFrom == null
+  ) {
+    return
+  }
   patchWorkoutSession(sessionId, (s) => {
-    if (index >= 0 && index < s.exercises.length) {
-      s.currentExerciseIndex = index
-      s.restEndsAt = undefined
-    }
+    if (index < 0 || index >= s.exercises.length) return
+    s.currentExerciseIndex = index
+    s.restEndsAt = undefined
+    s.restLockUntil = undefined
+    s.restAdvanceFrom = undefined
   })
 }
 

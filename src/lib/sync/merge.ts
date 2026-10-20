@@ -1,7 +1,15 @@
 import { timeMs } from '@/lib/coerce'
 import { hydrateAppData } from '@/lib/hydrate'
 import { defaultWorkout } from '@/lib/workout'
-import type { AppData, DailyLog, Settings, Tombstones, WorkoutSession, WorkoutStore } from '@/types'
+import type {
+  AppData,
+  DailyLog,
+  Settings,
+  Tombstones,
+  WeightMemoryEntry,
+  WorkoutSession,
+  WorkoutStore,
+} from '@/types'
 
 export const SYNC_KIND = 'jianzhi-notes-sync'
 
@@ -97,20 +105,38 @@ export function mergeSessions(
     const stripped = stripTimer(session)
     if (session.id === localActiveId) {
       const localSess = local.find((s) => s.id === session.id)
-      if (localSess && timeMs(localSess.updatedAt) >= timeMs(stripped.updatedAt)) {
-        out.push(localSess)
+      const newer =
+        localSess && timeMs(localSess.updatedAt) >= timeMs(stripped.updatedAt) ? localSess : stripped
+      if (localSess) {
+        out.push({
+          ...newer,
+          currentExerciseIndex: localSess.currentExerciseIndex,
+          restAdvanceFrom: localSess.restAdvanceFrom,
+          restEndsAt: localSess.restEndsAt,
+          restLockUntil: localSess.restLockUntil,
+        })
         continue
       }
-      out.push({
-        ...stripped,
-        restEndsAt: localSess?.restEndsAt,
-        restLockUntil: localSess?.restLockUntil,
-      })
+      out.push(stripped)
       continue
     }
     out.push(stripped)
   }
   return out
+}
+
+export function mergeWeightMemory(
+  local?: WeightMemoryEntry[],
+  remote?: WeightMemoryEntry[],
+): WeightMemoryEntry[] | undefined {
+  const map = new Map<string, WeightMemoryEntry>()
+  for (const entry of local ?? []) map.set(entry.exerciseId, entry)
+  for (const entry of remote ?? []) {
+    const cur = map.get(entry.exerciseId)
+    if (!cur || timeMs(entry.updatedAt) > timeMs(cur.updatedAt)) map.set(entry.exerciseId, entry)
+  }
+  const out = [...map.values()]
+  return out.length > 0 ? out : undefined
 }
 
 export function mergeCloudData(local: AppData, remote: AppData): AppData {
@@ -168,6 +194,7 @@ export function mergeCloudData(local: AppData, remote: AppData): AppData {
       templatesUpdatedAt,
       sessions,
       activeSessionId: localW.activeSessionId,
+      weightMemory: mergeWeightMemory(localW.weightMemory, remoteW.weightMemory),
     },
     tombstones,
   })
