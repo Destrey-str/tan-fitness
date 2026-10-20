@@ -5,9 +5,11 @@ import { useAppData, useLogMap } from '@/hooks/useAppData'
 import { formatMd } from '@/lib/dates'
 import {
   calorieDeficit,
+  dayKindLabel,
   formatInt,
   formatOne,
   resolveBmr,
+  resolveDayKind,
   resolveOverlap,
   strengthMark,
   totalIntake,
@@ -17,6 +19,7 @@ import { cn } from '@/lib/utils'
 
 const COLUMNS = [
   '日期',
+  '日型',
   '空腹体重',
   '肚脐腰围',
   '昨日步数',
@@ -57,8 +60,9 @@ export function LogPage({
   onDateChange: (next: string) => void
   onOpenDay: (tab: TabId, nextDate: string) => void
 }) {
-  const { logs, settings } = useAppData()
+  const { logs, settings, workout } = useAppData()
   const map = useLogMap()
+  const sessions = workout?.sessions ?? []
   const [view, setView] = useState<'table' | 'cards'>('table')
 
   const rows = useMemo(() => {
@@ -118,6 +122,7 @@ export function LogPage({
                   const deficit = calorieDeficit(log, settings)
                   const mark = strengthMark(log.strengthTraining)
                   const selected = log.date === date
+                  const kind = dayKindLabel(resolveDayKind(log, sessions, log.date))
                   return (
                     <tr
                       key={log.date}
@@ -125,6 +130,7 @@ export function LogPage({
                       onClick={() => onOpenDay('today', log.date)}
                     >
                       <td>{formatMd(log.date)}</td>
+                      <td>{kind}</td>
                       <td>{cell(log.weightKg, 'one')}</td>
                       <td>{cell(log.waistCm, 'one')}</td>
                       <td>{cell(log.yesterdaySteps)}</td>
@@ -162,6 +168,7 @@ export function LogPage({
             const intake = totalIntake(log)
             const deficit = calorieDeficit(log, settings)
             const selected = log.date === date
+            const kind = dayKindLabel(resolveDayKind(log, sessions, log.date))
             return (
               <li key={log.date}>
                 <button
@@ -173,7 +180,9 @@ export function LogPage({
                   onClick={() => onOpenDay('today', log.date)}
                 >
                   <div className="flex items-center justify-between">
-                    <span className="font-semibold">{formatMd(log.date)}</span>
+                    <span className="font-semibold">
+                      {formatMd(log.date)} · {kind}
+                    </span>
                     <span
                       className={cn(
                         'text-sm tabular-nums',

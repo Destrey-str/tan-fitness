@@ -93,9 +93,19 @@ export interface WorkoutStore {
 
 export type ChartRange = 7 | 14 | 28 | 90
 
+export type DayKind = 'train' | 'rest'
+
+export const DEFAULT_TRAINING_TARGET_KCAL = 2000
+export const DEFAULT_REST_TARGET_KCAL = 1800
+
 export interface Settings {
   displayName: string
+  /** Legacy single target. Fallback for training days when trainingTargetKcal is missing. */
   targetKcal: number
+  /** Intake target on 训练日. Defaults to targetKcal. */
+  trainingTargetKcal: number
+  /** Intake target on 休息日. Defaults to 1800. */
+  restTargetKcal: number
   tdee: number
   proteinTarget: number
   burnSource: BurnSource
@@ -128,6 +138,15 @@ export interface DailyLog {
   extraBurnKcal?: number
   bandBurnKcal?: number
   notes?: string
+  /**
+   * 训练日 or 休息日 for this date.
+   * Without dayKindManual, a workout session that day still wins.
+   */
+  dayKind?: DayKind
+  /** True after the user taps 训练日 / 休息日. Keeps the choice when settings change. */
+  dayKindManual?: boolean
+  /** Intake target captured for this day. Settings edits do not rewrite it. */
+  intakeTargetKcal?: number
   updatedAt?: string
 }
 
@@ -152,7 +171,9 @@ export const DEFAULT_EXTRA_BURN_KCAL = DEFAULT_OVERLAP_KCAL
 
 export const DEFAULT_SETTINGS: Settings = {
   displayName: '',
-  targetKcal: 2000,
+  targetKcal: DEFAULT_TRAINING_TARGET_KCAL,
+  trainingTargetKcal: DEFAULT_TRAINING_TARGET_KCAL,
+  restTargetKcal: DEFAULT_REST_TARGET_KCAL,
   tdee: 2300,
   proteinTarget: 130,
   burnSource: 'band',

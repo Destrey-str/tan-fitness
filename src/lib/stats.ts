@@ -3,8 +3,11 @@ import { addDays } from '@/lib/dates'
 import {
   DEFAULT_BMR_KCAL,
   DEFAULT_OVERLAP_KCAL,
+  DEFAULT_REST_TARGET_KCAL,
+  DEFAULT_TRAINING_TARGET_KCAL,
   type BurnSource,
   type DailyLog,
+  type DayKind,
   type Settings,
 } from '@/types'
 
@@ -104,13 +107,58 @@ export function formatDeficitEquation(
   return `${eqNum(burn.bmr)} + ${eqNum(burn.band)} − ${eqNum(burn.overlap)} − ${eqNum(intake)} = ${eqNum(deficit)}`
 }
 
+export function trainingTargetKcal(settings: Settings | undefined): number {
+  const training = asFiniteNumber(settings?.trainingTargetKcal)
+  if (training != null && training > 0) return training
+  const legacy = asFiniteNumber(settings?.targetKcal)
+  if (legacy != null && legacy > 0) return legacy
+  return DEFAULT_TRAINING_TARGET_KCAL
+}
+
+export function restTargetKcal(settings: Settings | undefined): number {
+  const rest = asFiniteNumber(settings?.restTargetKcal)
+  if (rest != null && rest > 0) return rest
+  return DEFAULT_REST_TARGET_KCAL
+}
+
+export function targetForKind(settings: Settings | undefined, kind: DayKind): number {
+  return kind === 'train' ? trainingTargetKcal(settings) : restTargetKcal(settings)
+}
+
+export function dayKindLabel(kind: DayKind): '训练日' | '休息日' {
+  return kind === 'train' ? '训练日' : '休息日'
+}
+
+export function resolveDayKind(
+  log: DailyLog | undefined,
+  sessions: { date: string }[] | undefined,
+  date: string | undefined,
+): DayKind {
+  if (log?.dayKind === 'train' || log?.dayKind === 'rest') return log.dayKind
+  const day = date ?? log?.date
+  if (day && sessions?.some((session) => session.date === day)) return 'train'
+  return 'rest'
+}
+
+/** Stored intake target wins. Otherwise the live target for that kind. */
+export function resolveIntakeTarget(
+  log: DailyLog | undefined,
+  settings: Settings | undefined,
+  kind?: DayKind,
+): number {
+  const stored = asFiniteNumber(log?.intakeTargetKcal)
+  if (stored != null && stored > 0) return stored
+  return targetForKind(settings, kind ?? resolveDayKind(log, undefined, log?.date))
+}
+
 export function vsTarget(
   log: DailyLog | undefined,
   settings: Settings | undefined,
+  intakeTarget?: number,
 ): number | undefined {
   const intake = totalIntake(log)
   if (intake === undefined) return undefined
-  const target = asFiniteNumber(settings?.targetKcal) ?? 2000
+  const target = intakeTarget ?? resolveIntakeTarget(log, settings)
   return intake - target
 }
 

@@ -17,7 +17,9 @@ import { useAppData, useLogMap } from '@/hooks/useAppData'
 import { dateRangeInclusive, formatMd, todayIso } from '@/lib/dates'
 import {
   calorieDeficit,
+  dayKindLabel,
   linearTrend,
+  resolveDayKind,
   rollingAverage,
   totalIntake,
 } from '@/lib/stats'
@@ -35,6 +37,7 @@ type ChartRow = {
   weightMa7: number | null
   waistMa7: number | null
   weightTrend: number | null
+  dayKind: string
 }
 
 function paddedDomain(values: number[]): [number, number] | ['auto', 'auto'] {
@@ -52,13 +55,14 @@ function ChartTooltip({
   label,
 }: {
   active?: boolean
-  payload?: { name: string; value: number; color: string }[]
+  payload?: { name: string; value: number; color: string; payload?: { dayKind?: string } }[]
   label?: string
 }) {
   if (!active || !payload?.length) return null
+  const kind = payload[0]?.payload?.dayKind
   return (
     <div className="rounded-xl border border-[var(--line)] bg-[var(--card)] px-3 py-2 text-xs shadow-md">
-      <p className="mb-1 font-medium">{label}</p>
+      <p className="mb-1 font-medium">{kind ? `${label} · ${kind}` : label}</p>
       {payload.map((item) =>
         item.value == null ? null : (
           <p key={item.name} style={{ color: item.color }}>
@@ -71,8 +75,9 @@ function ChartTooltip({
 }
 
 export function ChartsPage() {
-  const { logs, settings } = useAppData()
+  const { logs, settings, workout } = useAppData()
   const map = useLogMap()
+  const sessions = workout?.sessions ?? []
   const [range, setRange] = useState<ChartRange>(28)
   const [showMa7, setShowMa7] = useState(true)
   const [showTrend, setShowTrend] = useState(true)
@@ -91,6 +96,7 @@ export function ChartsPage() {
     }
     const rows: ChartRow[] = dates.map((date) => {
       const log = map.get(date)
+      const hasDay = log != null || sessions.some((session) => session.date === date)
       return {
         date,
         label: formatMd(date),
@@ -101,6 +107,7 @@ export function ChartsPage() {
         weightMa7: null,
         waistMa7: null,
         weightTrend: null,
+        dayKind: hasDay ? dayKindLabel(resolveDayKind(log, sessions, date)) : '',
       }
     })
     const weightMa = rollingAverage(dates, weightMap, 7)
@@ -112,7 +119,7 @@ export function ChartsPage() {
       waistMa7: waistMa[i],
       weightTrend: trend[i],
     }))
-  }, [logs, map, range, settings])
+  }, [logs, map, range, sessions, settings])
 
   const hasBody = data.some((d) => d.weight != null || d.waist != null)
   const hasDeficit = data.some((d) => d.deficit != null)

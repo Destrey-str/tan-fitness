@@ -2,8 +2,11 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import {
   calorieDeficit,
+  dayKindLabel,
   formatInt,
   resolveBurn,
+  resolveDayKind,
+  resolveIntakeTarget,
   totalIntake,
   vsTarget,
 } from '@/lib/stats'
@@ -18,24 +21,29 @@ function sourceLabel(burn: ReturnType<typeof resolveBurn>): string {
 export function SummaryCards({
   log,
   settings,
+  date,
+  sessions,
 }: {
   log: DailyLog | undefined
   settings: Settings
+  date?: string
+  sessions?: { date: string }[]
 }) {
   const intake = totalIntake(log)
   const burn = resolveBurn(log, settings)
   const deficit = calorieDeficit(log, settings)
-  const targetDiff = vsTarget(log, settings)
-  const target = settings?.targetKcal > 0 ? settings.targetKcal : 2000
+  const kind = resolveDayKind(log, sessions, date ?? log?.date)
+  const target = resolveIntakeTarget(log, settings, kind)
+  const targetDiff = vsTarget(log, settings, target)
   const intakePct =
-    intake == null ? 0 : Math.min(100, Math.round((intake / target) * 100))
+    intake == null || target <= 0 ? 0 : Math.min(100, Math.round((intake / target) * 100))
 
   return (
     <div className="grid grid-cols-2 gap-2.5">
       <Card className="col-span-2 p-3">
         <div className="mb-2 flex items-end justify-between gap-2">
           <div>
-            <p className="text-xs text-[var(--muted)]">总摄入 / 目标</p>
+            <p className="text-xs text-[var(--muted)]">总摄入 / {dayKindLabel(kind)}目标</p>
             <p className="text-2xl font-semibold tabular-nums">
               {intake == null ? '—' : formatInt(intake)}
               <span className="ml-1 text-sm font-normal text-[var(--muted)]">

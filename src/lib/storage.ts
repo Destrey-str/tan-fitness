@@ -7,7 +7,7 @@ import {
   hydrateSettings,
   parseStoredPayload,
 } from '@/lib/hydrate'
-import { logHasData } from '@/lib/stats'
+import { logHasData, resolveDayKind, targetForKind, trainingTargetKcal } from '@/lib/stats'
 import {
   clampRest,
   defaultWorkout,
@@ -25,6 +25,7 @@ import {
   emptyData,
   type AppData,
   type DailyLog,
+  type DayKind,
   type Settings,
   type TemplateId,
   type WorkoutSession,
@@ -222,6 +223,13 @@ export function upsertLog(date: string, patch: Partial<DailyLog>) {
   if (typeof patch.proteinScoops === 'number' && Number.isFinite(patch.proteinScoops)) {
     settings = { ...settings, lastProteinScoops: patch.proteinScoops }
   }
+  const sessions = data.workout?.sessions ?? []
+  if (next.dayKind !== 'train' && next.dayKind !== 'rest') {
+    next.dayKind = resolveDayKind(undefined, sessions, date)
+  }
+  if (!(typeof next.intakeTargetKcal === 'number' && next.intakeTargetKcal > 0)) {
+    next.intakeTargetKcal = targetForKind(settings, next.dayKind ?? 'rest')
+  }
   next.updatedAt = nowIso()
   const stones = tombstones()
   delete stones.logs[date]
@@ -239,6 +247,19 @@ export function upsertLog(date: string, patch: Partial<DailyLog>) {
     tombstones: stones,
   }
   emit()
+}
+
+export function setDayKind(date: string, kind: DayKind) {
+  const existing = data.logs.find((l) => l.date === date)
+  const target = targetForKind(data.settings, kind)
+  if (
+    existing?.dayKindManual === true &&
+    existing.dayKind === kind &&
+    existing.intakeTargetKcal === target
+  ) {
+    return
+  }
+  upsertLog(date, { dayKind: kind, dayKindManual: true, intakeTargetKcal: target })
 }
 
 export function deleteLog(date: string) {
@@ -439,6 +460,18 @@ export function startWorkoutSession(date: string, templateId: TemplateId, restSe
     ...w,
     sessions: [...w.sessions, session],
     activeSessionId: session.id,
+  })
+  promoteTrainingDay(date)
+}
+
+/** A new session makes a non-manual rest day a training day. Existing training targets stay. */
+function promoteTrainingDay(date: string) {
+  const existing = data.logs.find((l) => l.date === date)
+  if (!existing || existing.dayKindManual === true) return
+  if (existing.dayKind === 'train') return
+  upsertLog(date, {
+    dayKind: 'train',
+    intakeTargetKcal: trainingTargetKcal(data.settings),
   })
 }
 

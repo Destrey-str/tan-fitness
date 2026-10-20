@@ -5,11 +5,14 @@ import {
   DEFAULT_BMR_KCAL,
   DEFAULT_OVERLAP_KCAL,
   DEFAULT_SETTINGS,
+  DEFAULT_TRAINING_TARGET_KCAL,
   emptyData,
   type AppData,
   type DailyLog,
+  type DayKind,
   type Settings,
   type Tombstones,
+  type WorkoutSession,
 } from '@/types'
 
 const STORAGE_KEY = 'jianzhi-log-v1'
@@ -47,6 +50,8 @@ export function hydrateSettings(
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base
   const row = raw as Record<string, unknown>
   const target = asInt(row.targetKcal)
+  const training = asInt(row.trainingTargetKcal)
+  const rest = asInt(row.restTargetKcal)
   const tdee = asInt(row.tdee)
   const protein = asInt(row.proteinTarget)
   const bmr = asInt(row.bmrDefaultKcal)
@@ -56,9 +61,12 @@ export function hydrateSettings(
   const overlapDefaultKcal = opts?.migrateOverlap
     ? DEFAULT_OVERLAP_KCAL
     : (overlapNew ?? overlapOld ?? DEFAULT_OVERLAP_KCAL)
+  const targetKcal = target != null && target > 0 ? target : base.targetKcal
   return {
     displayName: asString(row.displayName),
-    targetKcal: target != null && target > 0 ? target : base.targetKcal,
+    targetKcal,
+    trainingTargetKcal: training != null && training > 0 ? training : targetKcal,
+    restTargetKcal: rest != null && rest > 0 ? rest : base.restTargetKcal,
     tdee: tdee != null && tdee > 0 ? tdee : base.tdee,
     proteinTarget: protein != null && protein > 0 ? protein : base.proteinTarget,
     burnSource: row.burnSource === 'tdee' ? 'tdee' : 'band',
@@ -119,9 +127,39 @@ export function hydrateLog(raw: unknown, opts?: { migrateOverlap?: boolean }): D
   if (bandBurnKcal != null) log.bandBurnKcal = bandBurnKcal
   const notes = asString(row.notes)
   if (notes) log.notes = notes
+  if (row.dayKind === 'train' || row.dayKind === 'rest') log.dayKind = row.dayKind
+  if (row.dayKindManual === true) log.dayKindManual = true
+  const intakeTargetKcal = asInt(row.intakeTargetKcal)
+  if (intakeTargetKcal != null && intakeTargetKcal > 0) log.intakeTargetKcal = intakeTargetKcal
   const updatedAt = asIsoTime(row.updatedAt)
   if (updatedAt) log.updatedAt = updatedAt
   return log
+}
+
+/**
+ * Old logs had one shared target. Freeze that number onto the day so a later
+ * split into training/rest targets does not rewrite history. updatedAt stays.
+ */
+export function stampLegacyDayTargets(
+  logs: DailyLog[],
+  sessions: Pick<WorkoutSession, 'date'>[],
+  legacyTargetKcal: number,
+): DailyLog[] {
+  const trained = new Set(sessions.map((session) => session.date))
+  const legacy =
+    legacyTargetKcal > 0 ? Math.round(legacyTargetKcal) : DEFAULT_TRAINING_TARGET_KCAL
+  return logs.map((log) => {
+    const hasKind = log.dayKind === 'train' || log.dayKind === 'rest'
+    const hasTarget = typeof log.intakeTargetKcal === 'number' && log.intakeTargetKcal > 0
+    if (hasKind && hasTarget) return log
+    const next: DailyLog = { ...log }
+    if (!hasKind) {
+      const kind: DayKind = trained.has(log.date) || log.strengthTraining === true ? 'train' : 'rest'
+      next.dayKind = kind
+    }
+    if (!hasTarget) next.intakeTargetKcal = legacy
+    return next
+  })
 }
 
 export function hydrateTombstones(raw: unknown): Tombstones {
@@ -155,12 +193,14 @@ export function hydrateAppData(parsed: unknown): AppData {
           .filter((row): row is DailyLog => row != null)
       : []
     logs.sort((a, b) => a.date.localeCompare(b.date))
+    const settings = hydrateSettings(root.settings, { migrateOverlap })
+    const workout = hydrateWorkout(root.workout as AppData['workout'])
     return {
       version: DATA_VERSION,
-      settings: hydrateSettings(root.settings, { migrateOverlap }),
+      settings,
       settingsUpdatedAt: asIsoTime(root.settingsUpdatedAt),
-      logs,
-      workout: hydrateWorkout(root.workout as AppData['workout']),
+      logs: stampLegacyDayTargets(logs, workout.sessions, settings.targetKcal),
+      workout,
       tombstones: hydrateTombstones(root.tombstones),
     }
   } catch {

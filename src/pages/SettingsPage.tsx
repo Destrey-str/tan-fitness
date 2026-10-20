@@ -187,13 +187,26 @@ export function SettingsPage() {
         <CardTitle className="mb-3">热量目标</CardTitle>
         <div className="grid grid-cols-1 gap-3">
           <NumberField
-            label="每日摄入目标"
+            label="训练日摄入目标"
             unit="大卡"
             integer
-            hint="建议 1900–2100，默认 2000"
-            value={settings.targetKcal}
+            hint="默认沿用原来的每日目标。已记下的日子不会跟着改。"
+            value={settings.trainingTargetKcal}
             onChange={(n) => {
-              if (n != null) updateSettings({ targetKcal: n })
+              if (n != null && n > 0) {
+                const next = Math.round(n)
+                updateSettings({ trainingTargetKcal: next, targetKcal: next })
+              }
+            }}
+          />
+          <NumberField
+            label="休息日摄入目标"
+            unit="大卡"
+            integer
+            hint="默认 1800。已记下的日子不会跟着改。"
+            value={settings.restTargetKcal}
+            onChange={(n) => {
+              if (n != null && n > 0) updateSettings({ restTargetKcal: Math.round(n) })
             }}
           />
           <NumberField

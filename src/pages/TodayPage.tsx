@@ -3,8 +3,9 @@ import { DayForm } from '@/components/DayForm'
 import { SummaryCards } from '@/components/SummaryCards'
 import { Button } from '@/components/ui/button'
 import { useAppData, useLog } from '@/hooks/useAppData'
-import { deleteLog } from '@/lib/storage'
-import { logHasData } from '@/lib/stats'
+import { deleteLog, setDayKind } from '@/lib/storage'
+import { logHasData, resolveDayKind } from '@/lib/stats'
+import type { DayKind } from '@/types'
 
 export function TodayPage({
   date,
@@ -13,9 +14,11 @@ export function TodayPage({
   date: string
   onDateChange: (next: string) => void
 }) {
-  const { settings } = useAppData()
+  const { settings, workout } = useAppData()
   const log = useLog(date)
   const name = String(settings?.displayName ?? '').trim()
+  const sessions = workout?.sessions ?? []
+  const kind = resolveDayKind(log, sessions, date)
 
   return (
     <div className="flex flex-col gap-3 pb-6">
@@ -29,7 +32,27 @@ export function TodayPage({
       </header>
 
       <DateSwitcher date={date} onChange={onDateChange} />
-      <SummaryCards log={log} settings={settings} />
+      <div className="flex gap-2" role="group" aria-label="训练日或休息日">
+        {(
+          [
+            ['train', '训练日'],
+            ['rest', '休息日'],
+          ] as const
+        ).map(([value, label]) => (
+          <Button
+            key={value}
+            type="button"
+            size="chip"
+            variant={kind === value ? 'default' : 'secondary'}
+            aria-pressed={kind === value}
+            data-testid={`day-kind-${value}`}
+            onClick={() => setDayKind(date, value as DayKind)}
+          >
+            {label}
+          </Button>
+        ))}
+      </div>
+      <SummaryCards log={log} settings={settings} date={date} sessions={sessions} />
       <DayForm date={date} log={log} />
 
       {log && logHasData(log) ? (
