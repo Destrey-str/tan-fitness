@@ -5,6 +5,7 @@ import { BottomNav } from '@/components/BottomNav'
 import { LogPage } from '@/pages/LogPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { TodayPage } from '@/pages/TodayPage'
+import { PlansPage } from '@/pages/PlansPage'
 import { TrainPage } from '@/pages/TrainPage'
 import { todayIso } from '@/lib/dates'
 import { getLoadError } from '@/lib/storage'
@@ -61,12 +62,14 @@ function persistUi(tab: TabId, date: string) {
 export default function App() {
   const [tab, setTab] = useState<TabId>(readTab)
   const [date, setDate] = useState(readDate)
+  const [plansOpen, setPlansOpen] = useState(false)
 
   useEffect(() => {
     startSyncEngine()
   }, [])
 
   const changeTab = useCallback((next: TabId) => {
+    setPlansOpen(false)
     setTab(next)
     persistUi(next, date)
   }, [date])
@@ -91,13 +94,16 @@ export default function App() {
             本机备份文件读不出来，没有覆盖原数据。请到设置导出后联系修复。
           </p>
         ) : null}
-        <ErrorBoundary key={tab}>
-        {tab === 'today' ? <TodayPage date={date} onDateChange={changeDate} /> : null}
-        {tab === 'log' ? (
+        <ErrorBoundary key={plansOpen ? 'plans' : tab}>
+        {plansOpen ? <PlansPage onClose={() => setPlansOpen(false)} /> : null}
+        {!plansOpen && tab === 'today' ? <TodayPage date={date} onDateChange={changeDate} /> : null}
+        {!plansOpen && tab === 'log' ? (
           <LogPage date={date} onDateChange={changeDate} onOpenDay={openDay} />
         ) : null}
-        {tab === 'train' ? <TrainPage date={date} /> : null}
-        {tab === 'charts' ? (
+        {!plansOpen && tab === 'train' ? (
+          <TrainPage date={date} onOpenPlans={() => setPlansOpen(true)} />
+        ) : null}
+        {!plansOpen && tab === 'charts' ? (
           <Suspense
             fallback={
               <p className="py-16 text-center text-sm text-[var(--muted)]">正在加载图表…</p>
@@ -106,7 +112,9 @@ export default function App() {
             <ChartsPage />
           </Suspense>
         ) : null}
-        {tab === 'settings' ? <SettingsPage /> : null}
+        {!plansOpen && tab === 'settings' ? (
+          <SettingsPage onOpenPlans={() => setPlansOpen(true)} />
+        ) : null}
         </ErrorBoundary>
       </main>
       <BottomNav tab={tab} onChange={changeTab} />

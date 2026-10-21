@@ -10,6 +10,9 @@ import {
 import { logHasData, resolveDayKind, targetForKind, trainingTargetKcal } from '@/lib/stats'
 import {
   clampRest,
+  cloneTemplates,
+  DEFAULT_PLAN_ID,
+  defaultTanPlan,
   defaultWorkout,
   hydrateWorkout,
   indexLastPerformances,
@@ -17,6 +20,8 @@ import {
   lookupWeightMemory,
   nextUnfinishedExerciseIndex,
   resolvePlannedWeights,
+  sessionRestLength,
+  withActivePlan,
 } from '@/lib/workout'
 import {
   DATA_VERSION,
@@ -27,8 +32,10 @@ import {
   type DailyLog,
   type DayKind,
   type Settings,
-  type TemplateId,
+  type TrainingPlan,
   type WorkoutSession,
+  type WorkoutStore,
+  type WorkoutTemplate,
 } from '@/types'
 
 export const STORAGE_KEY = 'jianzhi-log-v1'
@@ -130,6 +137,7 @@ function tombstones() {
   return {
     logs: { ...(data.tombstones?.logs ?? {}) },
     sessions: { ...(data.tombstones?.sessions ?? {}) },
+    plans: { ...(data.tombstones?.plans ?? {}) },
   }
 }
 
@@ -296,6 +304,11 @@ export function mergeImported(incoming: AppData) {
   )
   for (const log of incomingData.logs) delete stones.logs[log.date]
   for (const session of incomingWorkout.sessions) delete stones.sessions[session.id]
+  const planMap = new Map((current.plans ?? []).map((plan) => [plan.id, plan]))
+  for (const plan of incomingWorkout.plans ?? []) {
+    planMap.set(plan.id, plan)
+    delete stones.plans?.[plan.id]
+  }
   data = {
     version: DATA_VERSION,
     settings: hydrateSettings({ ...data.settings, ...incomingData.settings }),
@@ -307,6 +320,9 @@ export function mergeImported(incoming: AppData) {
       templates:
         incomingWorkout.templates.length > 0 ? incomingWorkout.templates : current.templates,
       templatesUpdatedAt: incomingWorkout.templatesUpdatedAt ?? current.templatesUpdatedAt,
+      plans: [...planMap.values()],
+      activePlanId: incomingWorkout.activePlanId ?? current.activePlanId,
+      activePlanUpdatedAt: incomingWorkout.activePlanUpdatedAt ?? current.activePlanUpdatedAt,
       sessions: [...sessMap.values()],
       activeSessionId: incomingWorkout.activeSessionId ?? current.activeSessionId,
     }),
@@ -319,12 +335,18 @@ export function clearAll() {
   storageReadOnly = false
   loadError = null
   const stamped = nowIso()
+  const revived = new Date(Date.parse(stamped) + 1).toISOString()
   const stones = tombstones()
   for (const log of data.logs) stones.logs[log.date] = stamped
   for (const session of data.workout?.sessions ?? []) stones.sessions[session.id] = stamped
+  for (const plan of data.workout?.plans ?? []) stones.plans[plan.id] = stamped
+  const fresh = defaultWorkout()
+  fresh.plans = fresh.plans.map((plan) => ({ ...plan, updatedAt: revived }))
+  fresh.activePlanUpdatedAt = revived
+  fresh.templatesUpdatedAt = revived
   data = {
     ...emptyData(),
-    workout: defaultWorkout(),
+    workout: fresh,
     settingsUpdatedAt: stamped,
     tombstones: stones,
   }
@@ -419,10 +441,12 @@ export function setRestDefault(sec: number) {
   setWorkout({ ...w, restSecDefault: clampRest(sec), restSecUpdatedAt: nowIso() })
 }
 
-export function startWorkoutSession(date: string, templateId: TemplateId, restSec?: number) {
+export function startWorkoutSession(date: string, templateId: string, restSec?: number) {
   const w = currentWorkout()
-  const template = w.templates.find((t) => t.id === templateId) ?? defaultWorkout().templates.find((t) => t.id === templateId)
-  if (!template) return
+  const template =
+    w.templates.find((t) => t.id === templateId) ??
+    defaultWorkout().templates.find((t) => t.id === templateId)
+  if (!template || template.exercises.length === 0) return
   const history = indexLastPerformances(w.sessions, w.activeSessionId)
   const session: WorkoutSession = {
     id: crypto.randomUUID(),
@@ -447,6 +471,7 @@ export function startWorkoutSession(date: string, templateId: TemplateId, restSe
         repsMin: e.repsMin,
         repsMax: e.repsMax,
         note: e.note,
+        restSec: e.restSec,
         setsDone: 0,
         isWarmup: e.isWarmup,
         setLogs: [],
@@ -515,7 +540,7 @@ export function completeWorkoutSet(sessionId: string) {
       if (nxt != null) next.currentExerciseIndex = nxt
     }
   } else {
-    next.restEndsAt = now + next.restSec * 1000
+    next.restEndsAt = now + sessionRestLength(next) * 1000
     next.restLockUntil = now + 500
     next.restAdvanceFrom = exerciseDone ? idx : undefined
     if (!exerciseDone) {
@@ -602,7 +627,7 @@ export function extendWorkoutRest(sessionId: string) {
   const w = currentWorkout()
   const session = w.sessions.find((s) => s.id === sessionId)
   if (!session) return
-  addWorkoutRest(sessionId, session.restSec)
+  addWorkoutRest(sessionId, sessionRestLength(session))
 }
 
 export function setSessionRestSec(sessionId: string, sec: number) {
@@ -718,14 +743,211 @@ export function abandonWorkoutSession(sessionId: string) {
 
 export function resetWorkoutTemplates() {
   const w = currentWorkout()
-  const fresh = defaultWorkout()
-  setWorkout({
-    ...w,
-    restSecDefault: fresh.restSecDefault,
-    restSecUpdatedAt: nowIso(),
-    templates: fresh.templates,
-    templatesUpdatedAt: nowIso(),
-  })
+  const now = nowIso()
+  const restored = defaultTanPlan(now)
+  const plans = (w.plans ?? []).some((plan) => plan.id === DEFAULT_PLAN_ID)
+    ? w.plans.map((plan) => (plan.id === DEFAULT_PLAN_ID ? restored : plan))
+    : [restored, ...(w.plans ?? [])]
+  setWorkout(
+    withActivePlan({
+      ...w,
+      plans,
+      activePlanId: DEFAULT_PLAN_ID,
+      activePlanUpdatedAt: now,
+      restSecDefault: defaultWorkout().restSecDefault,
+      restSecUpdatedAt: now,
+      templatesUpdatedAt: now,
+    }),
+  )
+}
+
+function commitPlans(plans: TrainingPlan[], extra: Partial<WorkoutStore> = {}) {
+  const w = currentWorkout()
+  const activeId = extra.activePlanId ?? w.activePlanId
+  const touchesActive = activeId === w.activePlanId || extra.activePlanId != null
+  setWorkout(
+    withActivePlan({
+      ...w,
+      ...extra,
+      plans,
+      activePlanId: activeId,
+      templatesUpdatedAt: touchesActive ? nowIso() : w.templatesUpdatedAt,
+    }),
+  )
+}
+
+export function setActivePlan(planId: string) {
+  const w = currentWorkout()
+  if (!w.plans.some((plan) => plan.id === planId) || w.activePlanId === planId) return
+  commitPlans(w.plans, { activePlanId: planId, activePlanUpdatedAt: nowIso() })
+}
+
+export function createPlan(name: string, copyFromId?: string): string {
+  const w = currentWorkout()
+  const id = `plan-${crypto.randomUUID()}`
+  const source = copyFromId ? w.plans.find((plan) => plan.id === copyFromId) : undefined
+  const trimmed = name.trim()
+  const plan: TrainingPlan = source
+    ? {
+        id,
+        name: trimmed || `${source.name} 副本`,
+        days: cloneTemplates(source.days),
+        updatedAt: nowIso(),
+      }
+    : {
+        id,
+        name: trimmed || '新计划',
+        days: [{ id: `day-${crypto.randomUUID()}`, name: '训练日', subtitle: '', exercises: [] }],
+        updatedAt: nowIso(),
+      }
+  commitPlans([...w.plans, plan])
+  return id
+}
+
+export function renamePlan(planId: string, name: string) {
+  const trimmed = name.trim()
+  if (!trimmed) return
+  editPlan(planId, (plan) => ({ ...plan, name: trimmed }))
+}
+
+export function deletePlan(planId: string) {
+  const w = currentWorkout()
+  if (w.plans.length <= 1 || !w.plans.some((plan) => plan.id === planId)) return
+  const stones = tombstones()
+  stones.plans[planId] = nowIso()
+  const plans = w.plans.filter((plan) => plan.id !== planId)
+  const switching = w.activePlanId === planId
+  data = { ...data, tombstones: stones }
+  commitPlans(plans, switching ? { activePlanId: plans[0]?.id, activePlanUpdatedAt: nowIso() } : {})
+}
+
+export function addPlanDay(planId: string, name: string) {
+  const day: WorkoutTemplate = {
+    id: `day-${crypto.randomUUID()}`,
+    name: name.trim() || '训练日',
+    subtitle: '',
+    exercises: [],
+  }
+  editPlan(planId, (plan) => ({ ...plan, days: [...plan.days, day] }))
+}
+
+export function updatePlanDay(
+  planId: string,
+  dayId: string,
+  patch: Partial<Pick<WorkoutTemplate, 'name' | 'subtitle' | 'tip'>>,
+) {
+  editPlan(planId, (plan) => ({
+    ...plan,
+    days: plan.days.map((day) => (day.id === dayId ? { ...day, ...patch, name: patch.name?.trim() || day.name } : day)),
+  }))
+}
+
+export function removePlanDay(planId: string, dayId: string) {
+  editPlan(planId, (plan) => ({ ...plan, days: plan.days.filter((day) => day.id !== dayId) }))
+}
+
+export function movePlanDay(planId: string, dayId: string, dir: -1 | 1) {
+  editPlan(planId, (plan) => ({ ...plan, days: moveById(plan.days, dayId, dir) }))
+}
+
+export function addPlanExercise(planId: string, dayId: string, isWarmup: boolean) {
+  const exercise = {
+    id: `ex-${crypto.randomUUID()}`,
+    name: isWarmup ? '新热身' : '新动作',
+    sets: isWarmup ? 1 : 3,
+    repsMin: isWarmup ? 1 : 8,
+    isWarmup,
+  }
+  editPlan(planId, (plan) => ({
+    ...plan,
+    days: plan.days.map((day) => {
+      if (day.id !== dayId) return day
+      const warmups = day.exercises.filter((item) => item.isWarmup)
+      const lifts = day.exercises.filter((item) => !item.isWarmup)
+      return {
+        ...day,
+        exercises: isWarmup ? [...warmups, exercise, ...lifts] : [...warmups, ...lifts, exercise],
+      }
+    }),
+  }))
+}
+
+export function updatePlanExercise(
+  planId: string,
+  dayId: string,
+  exerciseId: string,
+  patch: Partial<WorkoutTemplate['exercises'][number]>,
+) {
+  editPlan(planId, (plan) => ({
+    ...plan,
+    days: plan.days.map((day) => {
+      if (day.id !== dayId) return day
+      return {
+        ...day,
+        exercises: day.exercises.map((exercise) => {
+          if (exercise.id !== exerciseId) return exercise
+          const next = { ...exercise, ...patch, id: exercise.id }
+          if (patch.name != null) next.name = patch.name.trim() || exercise.name
+          if ('restSec' in patch) {
+            next.restSec =
+              patch.restSec == null || !Number.isFinite(patch.restSec)
+                ? undefined
+                : clampRest(patch.restSec)
+          }
+          return next
+        }),
+      }
+    }),
+  }))
+}
+
+export function removePlanExercise(planId: string, dayId: string, exerciseId: string) {
+  editPlan(planId, (plan) => ({
+    ...plan,
+    days: plan.days.map((day) =>
+      day.id === dayId
+        ? { ...day, exercises: day.exercises.filter((exercise) => exercise.id !== exerciseId) }
+        : day,
+    ),
+  }))
+}
+
+export function movePlanExercise(planId: string, dayId: string, exerciseId: string, dir: -1 | 1) {
+  editPlan(planId, (plan) => ({
+    ...plan,
+    days: plan.days.map((day) => {
+      if (day.id !== dayId) return day
+      const warmups = day.exercises.filter((item) => item.isWarmup)
+      const lifts = day.exercises.filter((item) => !item.isWarmup)
+      const group = day.exercises.find((item) => item.id === exerciseId)?.isWarmup ? warmups : lifts
+      const moved = moveById(group, exerciseId, dir)
+      const exercises = day.exercises.find((item) => item.id === exerciseId)?.isWarmup
+        ? [...moved, ...lifts]
+        : [...warmups, ...moved]
+      return { ...day, exercises }
+    }),
+  }))
+}
+
+function editPlan(planId: string, edit: (plan: TrainingPlan) => TrainingPlan) {
+  const w = currentWorkout()
+  if (!w.plans.some((plan) => plan.id === planId)) return
+  const plans = w.plans.map((plan) =>
+    plan.id === planId ? { ...edit(plan), id: planId, updatedAt: nowIso() } : plan,
+  )
+  const touchesActive = w.activePlanId === planId || (!w.activePlanId && w.plans[0]?.id === planId)
+  commitPlans(plans, touchesActive ? { templatesUpdatedAt: nowIso() } : {})
+}
+
+function moveById<T extends { id: string }>(list: T[], id: string, dir: -1 | 1): T[] {
+  const index = list.findIndex((item) => item.id === id)
+  const next = index + dir
+  if (index < 0 || next < 0 || next >= list.length) return list
+  const copy = list.slice()
+  const [item] = copy.splice(index, 1)
+  if (!item) return list
+  copy.splice(next, 0, item)
+  return copy
 }
 
 function patchWorkoutSession(sessionId: string, fn: (session: WorkoutSession) => void) {

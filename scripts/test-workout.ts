@@ -46,6 +46,8 @@ function load(partial: Record<string, unknown> = {}) {
     settings: { ...DEFAULT_SETTINGS },
     workout: {
       ...defaultWorkout(),
+      plans: [],
+      activePlanId: undefined,
       templates: [
         {
           id: 'push',
@@ -204,6 +206,8 @@ replaceAll({
   ...getSnapshot(),
   workout: {
     ...getSnapshot().workout,
+    plans: [],
+    activePlanId: undefined,
     templates: [
       {
         id: 'push',

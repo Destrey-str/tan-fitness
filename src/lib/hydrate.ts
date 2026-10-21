@@ -165,21 +165,20 @@ export function stampLegacyDayTargets(
 export function hydrateTombstones(raw: unknown): Tombstones {
   const logs: Record<string, string> = {}
   const sessions: Record<string, string> = {}
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { logs, sessions }
+  const plans: Record<string, string> = {}
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { logs, sessions, plans }
   const row = raw as Record<string, unknown>
-  if (row.logs && typeof row.logs === 'object' && !Array.isArray(row.logs)) {
-    for (const [key, value] of Object.entries(row.logs as Record<string, unknown>)) {
-      const iso = asIsoTime(value)
-      if (iso) logs[key] = iso
+  const readMap = (value: unknown, into: Record<string, string>) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    for (const [key, stamp] of Object.entries(value as Record<string, unknown>)) {
+      const iso = asIsoTime(stamp)
+      if (iso) into[key] = iso
     }
   }
-  if (row.sessions && typeof row.sessions === 'object' && !Array.isArray(row.sessions)) {
-    for (const [key, value] of Object.entries(row.sessions as Record<string, unknown>)) {
-      const iso = asIsoTime(value)
-      if (iso) sessions[key] = iso
-    }
-  }
-  return { logs, sessions }
+  readMap(row.logs, logs)
+  readMap(row.sessions, sessions)
+  readMap(row.plans, plans)
+  return { logs, sessions, plans }
 }
 
 export function hydrateAppData(parsed: unknown): AppData {

@@ -8,7 +8,7 @@
     "build": "tsc -b && vite build && node scripts/pages-fallback.mjs",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "npx --yes vite-node scripts/repro-crash.ts && npx --yes vite-node scripts/test-sync.ts && npx --yes vite-node scripts/test-workout.ts && npx --yes vite-node scripts/test-targets.ts"
+    "test": "npx --yes vite-node scripts/repro-crash.ts && npx --yes vite-node scripts/test-sync.ts && npx --yes vite-node scripts/test-workout.ts && npx --yes vite-node scripts/test-targets.ts && npx --yes vite-node scripts/test-plans.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",

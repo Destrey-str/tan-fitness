@@ -14,6 +14,8 @@ export interface ExerciseTemplate {
   repsMax?: number
   note?: string
   isWarmup?: boolean
+  /** Seconds of rest after a working set. Missing → the session default. */
+  restSec?: number
 }
 
 /** Weights typed before a session starts, so the next workout can prefill them. */
@@ -26,11 +28,19 @@ export interface WeightMemoryEntry {
 }
 
 export interface WorkoutTemplate {
-  id: TemplateId
+  id: string
   name: string
   subtitle: string
   tip?: string
   exercises: ExerciseTemplate[]
+}
+
+/** A named program. Days are the old push/pull/legs templates. */
+export interface TrainingPlan {
+  id: string
+  name: string
+  days: WorkoutTemplate[]
+  updatedAt?: string
 }
 
 export interface SetLog {
@@ -44,6 +54,8 @@ export interface ExerciseSession {
   repsMin: number
   repsMax?: number
   note?: string
+  /** Copied from the plan when the session starts. */
+  restSec?: number
   setsDone: number
   /** Optional free-text for the whole exercise (e.g. 握距、感觉). */
   weightNote?: string
@@ -61,7 +73,7 @@ export interface ExerciseSession {
 export interface WorkoutSession {
   id: string
   date: string
-  templateId: TemplateId
+  templateId: string
   templateName: string
   restSec: number
   startedAt: string
@@ -86,6 +98,10 @@ export interface WorkoutStore {
   restSecUpdatedAt?: string
   templates: WorkoutTemplate[]
   templatesUpdatedAt?: string
+  /** Programs. `templates` always mirrors the active plan's days. */
+  plans: TrainingPlan[]
+  activePlanId?: string
+  activePlanUpdatedAt?: string
   sessions: WorkoutSession[]
   activeSessionId?: string
   weightMemory?: WeightMemoryEntry[]
@@ -153,6 +169,7 @@ export interface DailyLog {
 export interface Tombstones {
   logs: Record<string, string>
   sessions: Record<string, string>
+  plans?: Record<string, string>
 }
 
 export interface AppData {
@@ -190,6 +207,7 @@ export function emptyData(): AppData {
     workout: {
       restSecDefault: 90,
       templates: [],
+      plans: [],
       sessions: [],
     },
     tombstones: { logs: {}, sessions: {} },

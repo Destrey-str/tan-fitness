@@ -6,6 +6,7 @@ import type {
   DailyLog,
   Settings,
   Tombstones,
+  TrainingPlan,
   WeightMemoryEntry,
   WorkoutSession,
   WorkoutStore,
@@ -30,7 +31,9 @@ export function normalizeTombstones(raw?: Tombstones | null): Tombstones {
     raw?.sessions && typeof raw.sessions === 'object' && !Array.isArray(raw.sessions)
       ? { ...raw.sessions }
       : {}
-  return { logs, sessions }
+  const plans =
+    raw?.plans && typeof raw.plans === 'object' && !Array.isArray(raw.plans) ? { ...raw.plans } : {}
+  return { logs, sessions, plans }
 }
 
 export function mergeTombstones(a: Tombstones, b: Tombstones): Tombstones {
@@ -42,7 +45,11 @@ export function mergeTombstones(a: Tombstones, b: Tombstones): Tombstones {
   for (const [key, iso] of Object.entries(b.sessions)) {
     if (timeMs(iso) >= timeMs(sessions[key])) sessions[key] = iso
   }
-  return { logs, sessions }
+  const plans: Record<string, string> = { ...(a.plans ?? {}) }
+  for (const [key, iso] of Object.entries(b.plans ?? {})) {
+    if (timeMs(iso) >= timeMs(plans[key])) plans[key] = iso
+  }
+  return { logs, sessions, plans }
 }
 
 function pickNewer<T>(
@@ -125,6 +132,31 @@ export function mergeSessions(
   return out
 }
 
+export function mergePlans(
+  local: TrainingPlan[] | undefined,
+  remote: TrainingPlan[] | undefined,
+  tombstones: Tombstones,
+): TrainingPlan[] {
+  const map = new Map<string, TrainingPlan>()
+  for (const plan of local ?? []) map.set(plan.id, plan)
+  for (const plan of remote ?? []) {
+    const cur = map.get(plan.id)
+    const winner = pickNewer(cur, plan, cur?.updatedAt, plan.updatedAt)
+    if (winner) map.set(plan.id, winner)
+  }
+  const ordered: TrainingPlan[] = []
+  const seen = new Set<string>()
+  for (const plan of [...(local ?? []), ...(remote ?? [])]) {
+    if (seen.has(plan.id)) continue
+    seen.add(plan.id)
+    const winner = map.get(plan.id)
+    if (!winner) continue
+    if (isDeleted(winner.updatedAt, tombstones.plans?.[plan.id])) continue
+    ordered.push(winner)
+  }
+  return ordered
+}
+
 export function mergeWeightMemory(
   local?: WeightMemoryEntry[],
   remote?: WeightMemoryEntry[],
@@ -173,6 +205,9 @@ export function mergeCloudData(local: AppData, remote: AppData): AppData {
     timeMs(remoteW.templatesUpdatedAt) > timeMs(localW.templatesUpdatedAt)
       ? remoteW.templatesUpdatedAt
       : localW.templatesUpdatedAt
+  const remoteActiveWins =
+    timeMs(remoteW.activePlanUpdatedAt) > timeMs(localW.activePlanUpdatedAt)
+  const plans = mergePlans(localW.plans, remoteW.plans, tombstones)
 
   const logs = mergeLogs(left.logs, right.logs, tombstones)
   const sessions = mergeSessions(
@@ -192,6 +227,11 @@ export function mergeCloudData(local: AppData, remote: AppData): AppData {
       restSecUpdatedAt,
       templates,
       templatesUpdatedAt,
+      plans,
+      activePlanId: remoteActiveWins ? remoteW.activePlanId : localW.activePlanId,
+      activePlanUpdatedAt: remoteActiveWins
+        ? remoteW.activePlanUpdatedAt
+        : localW.activePlanUpdatedAt,
       sessions,
       activeSessionId: localW.activeSessionId,
       weightMemory: mergeWeightMemory(localW.weightMemory, remoteW.weightMemory),

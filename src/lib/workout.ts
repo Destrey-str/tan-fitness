@@ -5,6 +5,7 @@ import type {
   ExerciseTemplate,
   SetLog,
   TemplateId,
+  TrainingPlan,
   WeightMemoryEntry,
   WorkoutSession,
   WorkoutStore,
@@ -12,6 +13,53 @@ import type {
 } from '@/types'
 
 export const DEFAULT_REST_SEC = 90
+export const DEFAULT_PLAN_ID = 'tan-ppl'
+export const DEFAULT_PLAN_NAME = '谭式推拉腿'
+
+export function cloneTemplates(templates: WorkoutTemplate[]): WorkoutTemplate[] {
+  return templates.map((day) => ({
+    ...day,
+    exercises: day.exercises.map((exercise) => ({ ...exercise })),
+  }))
+}
+
+export function defaultTanPlan(updatedAt?: string): TrainingPlan {
+  return {
+    id: DEFAULT_PLAN_ID,
+    name: DEFAULT_PLAN_NAME,
+    days: cloneTemplates(DEFAULT_TEMPLATES),
+    updatedAt,
+  }
+}
+
+export function withActivePlan(workout: WorkoutStore): WorkoutStore {
+  const plans = workout.plans.length > 0 ? workout.plans : [defaultTanPlan(workout.templatesUpdatedAt)]
+  const activePlanId = plans.some((plan) => plan.id === workout.activePlanId)
+    ? workout.activePlanId
+    : plans[0]?.id
+  const active = plans.find((plan) => plan.id === activePlanId) ?? plans[0]
+  return {
+    ...workout,
+    plans,
+    activePlanId,
+    templates: active ? cloneTemplates(active.days) : cloneTemplates(workout.templates),
+  }
+}
+
+export function activePlanOf(workout: WorkoutStore | undefined): TrainingPlan | undefined {
+  const plans = workout?.plans ?? []
+  if (plans.length === 0) return undefined
+  return plans.find((plan) => plan.id === workout?.activePlanId) ?? plans[0]
+}
+
+/** Rest after the set that is on screen. An exercise rest overrides the session default. */
+export function sessionRestLength(session: WorkoutSession): number {
+  const current = session.exercises?.[session.currentExerciseIndex]
+  if (current && typeof current.restSec === 'number' && Number.isFinite(current.restSec)) {
+    return clampRest(current.restSec)
+  }
+  return clampRest(session.restSec)
+}
 
 function wu(
   id: string,
@@ -174,12 +222,12 @@ export const DEFAULT_TEMPLATES: WorkoutTemplate[] = [
 ]
 
 export function defaultWorkout(): WorkoutStore {
+  const plan = defaultTanPlan()
   return {
     restSecDefault: DEFAULT_REST_SEC,
-    templates: DEFAULT_TEMPLATES.map((t) => ({
-      ...t,
-      exercises: t.exercises.map((e) => ({ ...e })),
-    })),
+    templates: cloneTemplates(plan.days),
+    plans: [plan],
+    activePlanId: plan.id,
     sessions: [],
     activeSessionId: undefined,
   }
@@ -477,8 +525,27 @@ export function formatSetWeights(ex: ExerciseSession): string | undefined {
 export function hydrateWorkout(raw?: Partial<WorkoutStore> | null): WorkoutStore {
   const base = defaultWorkout()
   if (!raw || typeof raw !== 'object') return base
+  const row = raw as Record<string, unknown>
   const restRaw = asFiniteNumber(raw.restSecDefault)
-  const templates = hydrateTemplates(raw.templates, base.templates)
+  const templatesUpdatedAt = asIsoTime(row.templatesUpdatedAt)
+  const legacyTemplates = hydrateTemplates(raw.templates, base.templates)
+  const storedPlans = hydratePlans(row.plans)
+  const plans =
+    storedPlans ??
+    [
+      {
+        id: DEFAULT_PLAN_ID,
+        name: DEFAULT_PLAN_NAME,
+        days: cloneTemplates(legacyTemplates),
+        updatedAt: templatesUpdatedAt,
+      },
+    ]
+  const requestedActive = asString(row.activePlanId)
+  const activePlanId = plans.some((plan) => plan.id === requestedActive)
+    ? requestedActive
+    : plans.some((plan) => plan.id === DEFAULT_PLAN_ID)
+      ? DEFAULT_PLAN_ID
+      : plans[0]?.id
   const sessions = Array.isArray(raw.sessions)
     ? raw.sessions.map(hydrateSession).filter((s): s is WorkoutSession => s != null)
     : []
@@ -486,16 +553,44 @@ export function hydrateWorkout(raw?: Partial<WorkoutStore> | null): WorkoutStore
     typeof raw.activeSessionId === 'string' && raw.activeSessionId
       ? raw.activeSessionId
       : undefined
-  return {
+  return withActivePlan({
     restSecDefault: restRaw == null ? base.restSecDefault : clampRest(restRaw),
-    restSecUpdatedAt: asIsoTime((raw as Record<string, unknown>).restSecUpdatedAt),
-    templates,
-    templatesUpdatedAt: asIsoTime((raw as Record<string, unknown>).templatesUpdatedAt),
+    restSecUpdatedAt: asIsoTime(row.restSecUpdatedAt),
+    templates: legacyTemplates,
+    templatesUpdatedAt,
+    plans,
+    activePlanId,
+    activePlanUpdatedAt: asIsoTime(row.activePlanUpdatedAt),
     sessions,
     activeSessionId: sessions.some((s) => s.id === activeSessionId)
       ? activeSessionId
       : undefined,
-    weightMemory: hydrateWeightMemory((raw as Record<string, unknown>).weightMemory),
+    weightMemory: hydrateWeightMemory(row.weightMemory),
+  })
+}
+
+function hydratePlans(raw: unknown): TrainingPlan[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null
+  const plans = raw
+    .map((item) => hydratePlan(item))
+    .filter((plan): plan is TrainingPlan => plan != null)
+  return plans.length > 0 ? plans : null
+}
+
+function hydratePlan(raw: unknown): TrainingPlan | null {
+  if (!raw || typeof raw !== 'object') return null
+  const row = raw as Record<string, unknown>
+  const id = asString(row.id)
+  if (!id) return null
+  const daysRaw = Array.isArray(row.days) ? row.days : Array.isArray(row.templates) ? row.templates : []
+  const days = daysRaw
+    .map((item) => hydrateDay(item, true))
+    .filter((day): day is WorkoutTemplate => day != null)
+  return {
+    id,
+    name: asString(row.name) || '未命名计划',
+    days,
+    updatedAt: asIsoTime(row.updatedAt),
   }
 }
 
@@ -509,19 +604,24 @@ function hydrateTemplates(
 }
 
 function hydrateTemplate(raw: unknown): WorkoutTemplate | null {
+  return hydrateDay(raw, false)
+}
+
+function hydrateDay(raw: unknown, keepEmpty: boolean): WorkoutTemplate | null {
   if (!raw || typeof raw !== 'object') return null
   const row = raw as Record<string, unknown>
-  const id = row.id
-  if (id !== 'push' && id !== 'pull' && id !== 'legs') return null
+  const id = asString(row.id)
+  if (!id) return null
   const exercises = Array.isArray(row.exercises)
     ? row.exercises
         .map((item) => hydrateExerciseTemplate(item))
         .filter((e): e is ExerciseTemplate => e != null)
     : []
-  if (exercises.length === 0) return null
+  if (exercises.length === 0 && !keepEmpty) return null
+  const fallbackName = id === 'push' ? '推' : id === 'pull' ? '拉' : id === 'legs' ? '腿' : '训练日'
   return {
     id,
-    name: asString(row.name, id === 'push' ? '推' : id === 'pull' ? '拉' : '腿'),
+    name: asString(row.name) || fallbackName,
     subtitle: asString(row.subtitle),
     tip: asString(row.tip) || undefined,
     exercises,
@@ -543,7 +643,14 @@ function hydrateExerciseTemplate(raw: unknown): ExerciseTemplate | null {
     repsMax: repsMax != null && repsMax > 0 ? Math.min(100, repsMax) : undefined,
     note: asString(row.note) || undefined,
     isWarmup: row.isWarmup === true,
+    restSec: restSecOf(row.restSec),
   }
+}
+
+function restSecOf(value: unknown): number | undefined {
+  const n = asFiniteNumber(value)
+  if (n == null || n <= 0) return undefined
+  return clampRest(n)
 }
 
 function weightFromUnknown(value: unknown): number | undefined {
@@ -599,6 +706,7 @@ function hydrateExerciseSession(raw: unknown): ExerciseSession | null {
     repsMin: clampInt(row.repsMin, 1, 100, 1),
     repsMax: repsMax != null && repsMax > 0 ? Math.min(100, repsMax) : undefined,
     note: asString(row.note) || undefined,
+    restSec: restSecOf(row.restSec),
     setsDone: done,
     weightNote: asString(row.weightNote) || undefined,
     setLogs,
@@ -633,7 +741,7 @@ export function hydrateSession(value: unknown): WorkoutSession | null {
   return {
     id,
     date,
-    templateId: templateId === 'pull' || templateId === 'legs' ? templateId : 'push',
+    templateId: asString(templateId) || 'push',
     templateName: asString(row.templateName, '训练'),
     restSec: clampRest(restRaw),
     startedAt: asString(row.startedAt) || new Date(0).toISOString(),

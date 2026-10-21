@@ -17,6 +17,7 @@ import {
   replaceAll,
   resetWorkoutTemplates,
   seedSampleLogs,
+  setActivePlan,
   updateSettings,
 } from '@/lib/storage'
 import { disableSync, enableSync, getSyncStatus, syncNow } from '@/lib/sync/engine'
@@ -70,7 +71,7 @@ function formatSyncAt(iso?: string): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-export function SettingsPage() {
+export function SettingsPage({ onOpenPlans }: { onOpenPlans?: () => void }) {
   const { settings, logs, workout } = useAppData()
   const sync = useSyncStatus()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -169,6 +170,36 @@ export function SettingsPage() {
         <p className="text-xs text-[var(--muted)]">本机保存 · 可选 Gist 同步</p>
         <h1 className="text-xl font-semibold">设置</h1>
       </header>
+
+      <Card>
+        <CardTitle className="mb-3">训练计划</CardTitle>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="active-plan">当前计划</Label>
+            <select
+              id="active-plan"
+              data-testid="active-plan"
+              className="h-11 rounded-xl border border-[var(--line)] bg-[var(--card)] px-3 text-base"
+              value={workout?.activePlanId ?? ''}
+              onChange={(e) => {
+                if (e.target.value) setActivePlan(e.target.value)
+              }}
+            >
+              {(workout?.plans ?? []).map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <p className="text-[11px] text-[var(--muted)]">训练页只显示当前计划里的训练日。</p>
+          {onOpenPlans ? (
+            <Button type="button" variant="secondary" onClick={onOpenPlans}>
+              管理训练计划
+            </Button>
+          ) : null}
+        </div>
+      </Card>
 
       <Card>
         <CardTitle className="mb-3">个人</CardTitle>
@@ -464,7 +495,7 @@ export function SettingsPage() {
             onClick={() => {
               if (
                 !window.confirm(
-                  '把推/拉/腿恢复成谭式默认模板（热身在前、高脚杯深蹲等）？不会清除饮食日志和训练历史。',
+                  '恢复「谭式推拉腿」的默认动作？其他计划、饮食和训练记录都会保留。',
                 )
               ) {
                 return

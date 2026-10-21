@@ -40,10 +40,12 @@ import {
   restClockChanged,
   sessionCompletedSets,
   sessionProgress,
+  activePlanOf,
+  sessionRestLength,
   templateHasWarmup,
   weekdayPlan,
 } from '@/lib/workout'
-import type { ExerciseSession, ExerciseTemplate, TemplateId, WorkoutSession } from '@/types'
+import type { ExerciseSession, ExerciseTemplate, WorkoutSession } from '@/types'
 import { cn } from '@/lib/utils'
 
 function listSectionLabel(
@@ -63,11 +65,18 @@ function isSessionDone(session: WorkoutSession): boolean {
   return exercises.every((e) => (e?.setsDone ?? 0) >= (e?.targetSets ?? 1))
 }
 
-export function TrainPage({ date }: { date: string }) {
+export function TrainPage({
+  date,
+  onOpenPlans,
+}: {
+  date: string
+  onOpenPlans?: () => void
+}) {
   const { workout } = useAppData()
-  const templates = workout?.templates ?? []
+  const program = activePlanOf(workout)
+  const templates = program?.days ?? workout?.templates ?? []
   const plan = weekdayPlan(parseIso(date))
-  const [picked, setPicked] = useState<TemplateId>(plan.templateId ?? 'push')
+  const [picked, setPicked] = useState(plan.templateId ?? templates[0]?.id ?? 'push')
   const [markStrength, setMarkStrength] = useState(true)
 
   const sessions = workout?.sessions ?? []
@@ -94,9 +103,15 @@ export function TrainPage({ date }: { date: string }) {
     [sessions, workout?.activeSessionId],
   )
 
+  const dayKey = templates.map((day) => day.id).join('|')
   useEffect(() => {
-    if (plan.templateId) setPicked(plan.templateId)
-  }, [date, plan.templateId])
+    setPicked((prev) => {
+      const ids = dayKey ? dayKey.split('|') : []
+      if (plan.templateId && ids.includes(plan.templateId)) return plan.templateId
+      if (ids.includes(prev)) return prev
+      return ids[0] ?? 'push'
+    })
+  }, [date, dayKey, plan.templateId])
 
   if (active) {
     return (
@@ -113,8 +128,17 @@ export function TrainPage({ date }: { date: string }) {
   return (
     <div className="flex flex-col gap-3 pb-6">
       <header>
-        <p className="text-xs text-[var(--muted)]">推 / 拉 / 腿 · 组间计时</p>
-        <h1 className="text-xl font-semibold">训练</h1>
+        <p className="text-xs text-[var(--muted)]">
+          {program?.name ?? '训练计划'} · 组间计时
+        </p>
+        <div className="flex items-center justify-between gap-2">
+          <h1 className="text-xl font-semibold">训练</h1>
+          {onOpenPlans ? (
+            <Button type="button" size="sm" variant="secondary" onClick={onOpenPlans}>
+              训练计划
+            </Button>
+          ) : null}
+        </div>
       </header>
 
       <Card>
@@ -130,11 +154,12 @@ export function TrainPage({ date }: { date: string }) {
         </p>
       </Card>
 
-      <div className="grid grid-cols-3 gap-2">
+      <div className="flex flex-wrap gap-2">
         {templates.map((t) => (
           <Button
             key={t.id}
             type="button"
+            className="h-auto min-h-11 whitespace-normal px-3 py-2"
             variant={picked === t.id ? 'default' : 'secondary'}
             onClick={() => setPicked(t.id)}
           >
@@ -259,7 +284,7 @@ export function TrainPage({ date }: { date: string }) {
         type="button"
         className="text-center text-[11px] text-[var(--muted)] underline-offset-2 hover:underline"
         onClick={() => {
-          if (window.confirm('把推/拉/腿恢复成谭式默认模板？进行中的训练不受影响。')) {
+          if (window.confirm('恢复「谭式推拉腿」的默认动作？其他计划、饮食和训练记录都会保留。')) {
             resetWorkoutTemplates()
           }
         }}
@@ -308,7 +333,9 @@ function TemplateExerciseRow({
           ) : null}
         </span>
         <span className="shrink-0 tabular-nums text-[var(--muted)]">
-          {ex.isWarmup ? '勾选' : `${ex.sets}×${repsLabel(ex.repsMin, ex.repsMax)}`}
+          {ex.isWarmup
+            ? '勾选'
+            : `${ex.sets}×${repsLabel(ex.repsMin, ex.repsMax)}${ex.restSec ? ` · ${ex.restSec}s` : ''}`}
         </span>
       </div>
       {!ex.isWarmup ? (
@@ -496,7 +523,7 @@ function RestOverlay({ session }: { session: WorkoutSession }) {
           {finished ? '00:00' : formatRest(remainingMs / 1000)}
         </p>
         <p className="mt-3 text-sm text-white/75">
-          {finished ? '可以开始下一组了' : `休息 ${session.restSec} 秒`}
+          {finished ? '可以开始下一组了' : `休息 ${sessionRestLength(session)} 秒`}
         </p>
       </div>
 
@@ -535,7 +562,7 @@ function RestOverlay({ session }: { session: WorkoutSession }) {
             variant="secondary"
             onClick={() => extendWorkoutRest(session.id)}
           >
-            再休 {session.restSec} 秒
+            再休 {sessionRestLength(session)} 秒
           </Button>
         </div>
       </div>
