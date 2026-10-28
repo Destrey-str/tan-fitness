@@ -4,10 +4,13 @@ import {
   calorieDeficit,
   dayKindLabel,
   formatInt,
+  formatOne,
   resolveBurn,
   resolveDayKind,
   resolveIntakeTarget,
+  totalCarbsG,
   totalIntake,
+  totalProteinG,
   vsTarget,
 } from '@/lib/stats'
 import type { DailyLog, Settings } from '@/types'
@@ -29,7 +32,7 @@ export function SummaryCards({
   date?: string
   sessions?: { date: string }[]
 }) {
-  const intake = totalIntake(log)
+  const intake = totalIntake(log, settings)
   const burn = resolveBurn(log, settings)
   const deficit = calorieDeficit(log, settings)
   const kind = resolveDayKind(log, sessions, date ?? log?.date)
@@ -59,6 +62,11 @@ export function SummaryCards({
             </Badge>
           ) : null}
         </div>
+        {log ? (
+          <p className="mb-2 text-[11px] text-[var(--muted)]">
+            碳水 {formatOne(totalCarbsG(log, settings))} g · 蛋白 {formatOne(totalProteinG(log, settings))} g
+          </p>
+        ) : null}
         <div className="h-2 overflow-hidden rounded-full bg-[var(--line)]">
           <div
             className={cn(

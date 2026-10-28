@@ -12,7 +12,9 @@ import {
   resolveDayKind,
   resolveOverlap,
   strengthMark,
+  totalCarbsG,
   totalIntake,
+  totalProteinG,
 } from '@/lib/stats'
 import type { DailyLog, TabId } from '@/types'
 import { cn } from '@/lib/utils'
@@ -31,6 +33,8 @@ const COLUMNS = [
   '晚',
   '额外',
   '总摄入',
+  '碳水(g)',
+  '蛋白(g)',
   '基础代谢',
   '手环消耗',
   '重叠扣减',
@@ -118,7 +122,7 @@ export function LogPage({
               </thead>
               <tbody>
                 {rows.map((log) => {
-                  const intake = totalIntake(log)
+                  const intake = totalIntake(log, settings)
                   const deficit = calorieDeficit(log, settings)
                   const mark = strengthMark(log.strengthTraining)
                   const selected = log.date === date
@@ -144,6 +148,8 @@ export function LogPage({
                       <td>{cell(log.dinnerKcal)}</td>
                       <td>{extraCell(log)}</td>
                       <td>{cell(intake)}</td>
+                      <td>{formatOne(totalCarbsG(log, settings))}</td>
+                      <td>{formatOne(totalProteinG(log, settings))}</td>
                       <td>{cell(resolveBmr(log, settings))}</td>
                       <td>{cell(log.bandBurnKcal)}</td>
                       <td>{cell(resolveOverlap(log, settings))}</td>
@@ -165,7 +171,7 @@ export function LogPage({
       ) : (
         <ul className="flex flex-col gap-2">
           {rows.map((log) => {
-            const intake = totalIntake(log)
+            const intake = totalIntake(log, settings)
             const deficit = calorieDeficit(log, settings)
             const selected = log.date === date
             const kind = dayKindLabel(resolveDayKind(log, sessions, log.date))
@@ -198,7 +204,8 @@ export function LogPage({
                   </div>
                   <p className="mt-1 text-xs text-[var(--muted)]">
                     体重 {cell(log.weightKg, 'one')} kg · 腰围 {cell(log.waistCm, 'one')} cm ·
-                    摄入 {cell(intake)} 大卡
+                    摄入 {cell(intake)} 大卡 · 碳水 {formatOne(totalCarbsG(log, settings))} g · 蛋白{' '}
+                    {formatOne(totalProteinG(log, settings))} g
                     {log.notes ? ` · ${log.notes}` : ''}
                   </p>
                 </button>

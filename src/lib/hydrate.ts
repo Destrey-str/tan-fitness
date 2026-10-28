@@ -4,6 +4,9 @@ import {
   DATA_VERSION,
   DEFAULT_BMR_KCAL,
   DEFAULT_OVERLAP_KCAL,
+  DEFAULT_SCOOP_CARBS_G,
+  DEFAULT_SCOOP_KCAL,
+  DEFAULT_SCOOP_PROTEIN_G,
   DEFAULT_SETTINGS,
   DEFAULT_TRAINING_TARGET_KCAL,
   emptyData,
@@ -58,6 +61,9 @@ export function hydrateSettings(
   const overlapNew = asNonNegInt(row.overlapDefaultKcal)
   const overlapOld = asNonNegInt(row.extraBurnDefaultKcal)
   const scoops = asNonNeg(row.lastProteinScoops)
+  const scoopKcal = asNonNeg(row.scoopKcal)
+  const scoopProteinG = asNonNeg(row.scoopProteinG)
+  const scoopCarbsG = asNonNeg(row.scoopCarbsG)
   const overlapDefaultKcal = opts?.migrateOverlap
     ? DEFAULT_OVERLAP_KCAL
     : (overlapNew ?? overlapOld ?? DEFAULT_OVERLAP_KCAL)
@@ -73,6 +79,9 @@ export function hydrateSettings(
     bmrDefaultKcal: bmr != null && bmr > 0 ? bmr : DEFAULT_BMR_KCAL,
     overlapDefaultKcal,
     lastProteinScoops: scoops,
+    scoopKcal: scoopKcal != null ? Math.round(scoopKcal) : base.scoopKcal,
+    scoopProteinG: scoopProteinG != null ? Math.round(scoopProteinG) : base.scoopProteinG,
+    scoopCarbsG: scoopCarbsG != null ? Math.round(scoopCarbsG) : base.scoopCarbsG,
   }
 }
 
@@ -111,6 +120,17 @@ export function hydrateLog(raw: unknown, opts?: { migrateOverlap?: boolean }): D
   if (extraKcal != null) log.extraKcal = extraKcal
   const extraNote = asString(row.extraNote)
   if (extraNote) log.extraNote = extraNote
+  assignGram(log, 'breakfastCarbsG', row.breakfastCarbsG)
+  assignGram(log, 'breakfastProteinG', row.breakfastProteinG)
+  assignGram(log, 'lunchCarbsG', row.lunchCarbsG)
+  assignGram(log, 'lunchProteinG', row.lunchProteinG)
+  assignGram(log, 'dinnerCarbsG', row.dinnerCarbsG)
+  assignGram(log, 'dinnerProteinG', row.dinnerProteinG)
+  assignGram(log, 'extraCarbsG', row.extraCarbsG)
+  assignGram(log, 'extraProteinG', row.extraProteinG)
+  assignGram(log, 'powderKcalPerScoop', row.powderKcalPerScoop)
+  assignGram(log, 'powderProteinPerScoop', row.powderProteinPerScoop)
+  assignGram(log, 'powderCarbsPerScoop', row.powderCarbsPerScoop)
   const bmrKcal = asInt(row.bmrKcal)
   if (bmrKcal != null && bmrKcal > 0) log.bmrKcal = bmrKcal
   const overlapDirect = asNonNegInt(row.overlapKcal)
@@ -134,6 +154,36 @@ export function hydrateLog(raw: unknown, opts?: { migrateOverlap?: boolean }): D
   const updatedAt = asIsoTime(row.updatedAt)
   if (updatedAt) log.updatedAt = updatedAt
   return log
+}
+
+function assignGram(log: DailyLog, key: keyof DailyLog, value: unknown) {
+  const n = asNonNeg(value)
+  if (n == null) return
+  ;(log as unknown as Record<string, number>)[key] = Math.round(n)
+}
+
+/**
+ * Days that already recorded scoops get the original 130/24/4 rates.
+ * updatedAt stays so a later settings change does not rewrite them.
+ */
+export function stampPowderRates(logs: DailyLog[]): DailyLog[] {
+  return logs.map((log) => {
+    const scoops = asNonNeg(log.proteinScoops) ?? 0
+    if (scoops <= 0) return log
+    if (
+      log.powderKcalPerScoop != null &&
+      log.powderProteinPerScoop != null &&
+      log.powderCarbsPerScoop != null
+    ) {
+      return log
+    }
+    return {
+      ...log,
+      powderKcalPerScoop: log.powderKcalPerScoop ?? DEFAULT_SCOOP_KCAL,
+      powderProteinPerScoop: log.powderProteinPerScoop ?? DEFAULT_SCOOP_PROTEIN_G,
+      powderCarbsPerScoop: log.powderCarbsPerScoop ?? DEFAULT_SCOOP_CARBS_G,
+    }
+  })
 }
 
 /**
@@ -198,7 +248,7 @@ export function hydrateAppData(parsed: unknown): AppData {
       version: DATA_VERSION,
       settings,
       settingsUpdatedAt: asIsoTime(root.settingsUpdatedAt),
-      logs: stampLegacyDayTargets(logs, workout.sessions, settings.targetKcal),
+      logs: stampPowderRates(stampLegacyDayTargets(logs, workout.sessions, settings.targetKcal)),
       workout,
       tombstones: hydrateTombstones(root.tombstones),
     }

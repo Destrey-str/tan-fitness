@@ -280,6 +280,36 @@ export function SettingsPage({ onOpenPlans }: { onOpenPlans?: () => void }) {
               if (n != null) updateSettings({ proteinTarget: n })
             }}
           />
+          <NumberField
+            label="蛋白粉每勺热量"
+            unit="大卡"
+            integer
+            hint="默认 130。新的勺数按这个算。已经记下的日子不变。"
+            value={settings.scoopKcal}
+            onChange={(n) => {
+              if (n != null && n >= 0) updateSettings({ scoopKcal: Math.round(n) })
+            }}
+          />
+          <NumberField
+            label="蛋白粉每勺蛋白质"
+            unit="g"
+            integer
+            hint="默认 24。已经记下的日子不变。"
+            value={settings.scoopProteinG}
+            onChange={(n) => {
+              if (n != null && n >= 0) updateSettings({ scoopProteinG: Math.round(n) })
+            }}
+          />
+          <NumberField
+            label="蛋白粉每勺碳水"
+            unit="g"
+            integer
+            hint="默认 4。已经记下的日子不变。"
+            value={settings.scoopCarbsG}
+            onChange={(n) => {
+              if (n != null && n >= 0) updateSettings({ scoopCarbsG: Math.round(n) })
+            }}
+          />
         </div>
       </Card>
 

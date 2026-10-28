@@ -8,10 +8,14 @@ import { upsertLog } from '@/lib/storage'
 import {
   calorieDeficit,
   formatInt,
+  formatOne,
+  powderContribution,
   resolveBmr,
   resolveBurn,
   resolveOverlap,
+  totalCarbsG,
   totalIntake,
+  totalProteinG,
 } from '@/lib/stats'
 import { cn } from '@/lib/utils'
 import type { DailyLog } from '@/types'
@@ -19,7 +23,10 @@ import type { DailyLog } from '@/types'
 export function DayForm({ date, log }: { date: string; log: DailyLog | undefined }) {
   const { settings } = useAppData()
   const patch = (next: Partial<DailyLog>) => upsertLog(date, next)
-  const intake = totalIntake(log)
+  const intake = totalIntake(log, settings)
+  const carbs = totalCarbsG(log, settings)
+  const protein = totalProteinG(log, settings)
+  const powder = powderContribution(log, settings)
   const shownBmr = resolveBmr(log, settings)
   const overlap = resolveOverlap(log, settings)
   const burn = resolveBurn(log, settings)
@@ -104,39 +111,75 @@ export function DayForm({ date, log }: { date: string; log: DailyLog | undefined
             </div>
           </div>
         </div>
+        {powder.kcal > 0 ? (
+          <p className="mt-3 text-[11px] leading-snug text-navy" data-testid="powder-line">
+            蛋白粉: {formatInt(powder.kcal)} kcal · {formatOne(powder.proteinG)}g 蛋白 ·{' '}
+            {formatOne(powder.carbsG)}g 碳水
+          </p>
+        ) : (
+          <p className="mt-3 text-[11px] text-[var(--muted)]">
+            勺数至少 1 时，蛋白粉单独计入总摄入，不用再写进某一餐。
+          </p>
+        )}
       </Card>
 
       <Card>
         <CardTitle className="mb-1">饮食</CardTitle>
-        <p className="mb-3 text-[11px] text-[var(--muted)]">单位：大卡。总摄入自动相加。</p>
-        <div className="grid grid-cols-2 gap-3">
-          <NumberField
-            label="早"
-            unit="大卡"
-            integer
-            value={log?.breakfastKcal}
-            onChange={(breakfastKcal) => patch({ breakfastKcal })}
+        <p className="mb-3 text-[11px] text-[var(--muted)]">
+          每餐可记大卡、碳水、蛋白。空着按 0 计入合计。
+        </p>
+        <div className="flex flex-col gap-3">
+          <MealMacros
+            title="早"
+            kcal={log?.breakfastKcal}
+            carbs={log?.breakfastCarbsG}
+            protein={log?.breakfastProteinG}
+            onChange={(next) =>
+              patch({
+                breakfastKcal: next.kcal,
+                breakfastCarbsG: next.carbs,
+                breakfastProteinG: next.protein,
+              })
+            }
           />
-          <NumberField
-            label="中"
-            unit="大卡"
-            integer
-            value={log?.lunchKcal}
-            onChange={(lunchKcal) => patch({ lunchKcal })}
+          <MealMacros
+            title="中"
+            kcal={log?.lunchKcal}
+            carbs={log?.lunchCarbsG}
+            protein={log?.lunchProteinG}
+            onChange={(next) =>
+              patch({
+                lunchKcal: next.kcal,
+                lunchCarbsG: next.carbs,
+                lunchProteinG: next.protein,
+              })
+            }
           />
-          <NumberField
-            label="晚"
-            unit="大卡"
-            integer
-            value={log?.dinnerKcal}
-            onChange={(dinnerKcal) => patch({ dinnerKcal })}
+          <MealMacros
+            title="晚"
+            kcal={log?.dinnerKcal}
+            carbs={log?.dinnerCarbsG}
+            protein={log?.dinnerProteinG}
+            onChange={(next) =>
+              patch({
+                dinnerKcal: next.kcal,
+                dinnerCarbsG: next.carbs,
+                dinnerProteinG: next.protein,
+              })
+            }
           />
-          <NumberField
-            label="额外"
-            unit="大卡"
-            integer
-            value={log?.extraKcal}
-            onChange={(extraKcal) => patch({ extraKcal })}
+          <MealMacros
+            title="额外"
+            kcal={log?.extraKcal}
+            carbs={log?.extraCarbsG}
+            protein={log?.extraProteinG}
+            onChange={(next) =>
+              patch({
+                extraKcal: next.kcal,
+                extraCarbsG: next.carbs,
+                extraProteinG: next.protein,
+              })
+            }
           />
         </div>
         <div className="mt-3 flex flex-col gap-1.5">
@@ -155,7 +198,12 @@ export function DayForm({ date, log }: { date: string; log: DailyLog | undefined
             'bg-navy text-white',
           )}
         >
-          <span className="text-sm">总摄入</span>
+          <div>
+            <span className="text-sm">总摄入</span>
+            <p className="text-[11px] text-white/80" data-testid="macro-totals">
+              碳水 {formatOne(carbs)} g · 蛋白 {formatOne(protein)} g
+            </p>
+          </div>
           <span className="text-lg font-semibold tabular-nums">
             {intake == null ? '—' : `${formatInt(intake)} 大卡`}
           </span>
@@ -254,6 +302,44 @@ export function DayForm({ date, log }: { date: string; log: DailyLog | undefined
           onChange={(e) => patch({ notes: e.target.value || undefined })}
         />
       </Card>
+    </div>
+  )
+}
+
+function MealMacros({
+  title,
+  kcal,
+  carbs,
+  protein,
+  onChange,
+}: {
+  title: string
+  kcal?: number
+  carbs?: number
+  protein?: number
+  onChange: (next: { kcal?: number; carbs?: number; protein?: number }) => void
+}) {
+  const round = (n: number | undefined) => (n == null ? undefined : Math.round(n))
+  return (
+    <div className="flex flex-col gap-1.5">
+      <p className="text-sm font-medium">{title}</p>
+      <div className="grid grid-cols-3 gap-2">
+        <NumberField label="大卡" integer value={kcal} onChange={(n) => onChange({ kcal: round(n), carbs, protein })} />
+        <NumberField
+          label="碳水"
+          unit="g"
+          integer
+          value={carbs}
+          onChange={(n) => onChange({ kcal, carbs: round(n), protein })}
+        />
+        <NumberField
+          label="蛋白"
+          unit="g"
+          integer
+          value={protein}
+          onChange={(n) => onChange({ kcal, carbs, protein: round(n) })}
+        />
+      </div>
     </div>
   )
 }

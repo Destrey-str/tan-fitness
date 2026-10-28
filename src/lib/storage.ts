@@ -231,6 +231,12 @@ export function upsertLog(date: string, patch: Partial<DailyLog>) {
   if (typeof patch.proteinScoops === 'number' && Number.isFinite(patch.proteinScoops)) {
     settings = { ...settings, lastProteinScoops: patch.proteinScoops }
   }
+  const scoops = typeof next.proteinScoops === 'number' ? next.proteinScoops : 0
+  if (scoops >= 1 && next.powderKcalPerScoop == null) {
+    next.powderKcalPerScoop = settings.scoopKcal
+    next.powderProteinPerScoop = settings.scoopProteinG
+    next.powderCarbsPerScoop = settings.scoopCarbsG
+  }
   const sessions = data.workout?.sessions ?? []
   if (next.dayKind !== 'train' && next.dayKind !== 'rest') {
     next.dayKind = resolveDayKind(undefined, sessions, date)

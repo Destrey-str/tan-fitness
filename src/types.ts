@@ -113,6 +113,9 @@ export type DayKind = 'train' | 'rest'
 
 export const DEFAULT_TRAINING_TARGET_KCAL = 2000
 export const DEFAULT_REST_TARGET_KCAL = 1800
+export const DEFAULT_SCOOP_KCAL = 130
+export const DEFAULT_SCOOP_PROTEIN_G = 24
+export const DEFAULT_SCOOP_CARBS_G = 4
 
 export interface Settings {
   displayName: string
@@ -131,6 +134,10 @@ export interface Settings {
   overlapDefaultKcal: number
   /** Last protein scoops, carried onto new days. */
   lastProteinScoops?: number
+  /** Protein powder, per scoop. New days copy these; saved days keep their own. */
+  scoopKcal: number
+  scoopProteinG: number
+  scoopCarbsG: number
 }
 
 export interface DailyLog {
@@ -142,10 +149,25 @@ export interface DailyLog {
   cardioMinutes?: number
   proteinScoops?: number
   breakfastKcal?: number
+  breakfastCarbsG?: number
+  breakfastProteinG?: number
   lunchKcal?: number
+  lunchCarbsG?: number
+  lunchProteinG?: number
   dinnerKcal?: number
+  dinnerCarbsG?: number
+  dinnerProteinG?: number
   extraKcal?: number
+  extraCarbsG?: number
+  extraProteinG?: number
   extraNote?: string
+  /**
+   * Per-scoop powder rates captured for this day.
+   * Missing macros on a meal count as 0. These rates are not rewritten when settings change.
+   */
+  powderKcalPerScoop?: number
+  powderProteinPerScoop?: number
+  powderCarbsPerScoop?: number
   /** That day's BMR. Missing → settings.bmrDefaultKcal. */
   bmrKcal?: number
   /** Overlap deducted that day. Missing → settings.overlapDefaultKcal. */
@@ -196,6 +218,9 @@ export const DEFAULT_SETTINGS: Settings = {
   burnSource: 'band',
   bmrDefaultKcal: DEFAULT_BMR_KCAL,
   overlapDefaultKcal: DEFAULT_OVERLAP_KCAL,
+  scoopKcal: DEFAULT_SCOOP_KCAL,
+  scoopProteinG: DEFAULT_SCOOP_PROTEIN_G,
+  scoopCarbsG: DEFAULT_SCOOP_CARBS_G,
 }
 
 export function emptyData(): AppData {

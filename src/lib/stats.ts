@@ -4,6 +4,9 @@ import {
   DEFAULT_BMR_KCAL,
   DEFAULT_OVERLAP_KCAL,
   DEFAULT_REST_TARGET_KCAL,
+  DEFAULT_SCOOP_CARBS_G,
+  DEFAULT_SCOOP_KCAL,
+  DEFAULT_SCOOP_PROTEIN_G,
   DEFAULT_TRAINING_TARGET_KCAL,
   type BurnSource,
   type DailyLog,
@@ -49,7 +52,60 @@ export function resolveExtraBurn(
   return resolveOverlap(log, settings)
 }
 
-export function totalIntake(log: DailyLog | undefined): number | undefined {
+export type PowderRates = { kcal: number; proteinG: number; carbsG: number }
+
+export function powderRates(log: DailyLog | undefined, settings?: Settings): PowderRates {
+  const kcal = asFiniteNumber(log?.powderKcalPerScoop)
+  const proteinG = asFiniteNumber(log?.powderProteinPerScoop)
+  const carbsG = asFiniteNumber(log?.powderCarbsPerScoop)
+  return {
+    kcal: kcal != null ? kcal : (asFiniteNumber(settings?.scoopKcal) ?? DEFAULT_SCOOP_KCAL),
+    proteinG:
+      proteinG != null ? proteinG : (asFiniteNumber(settings?.scoopProteinG) ?? DEFAULT_SCOOP_PROTEIN_G),
+    carbsG: carbsG != null ? carbsG : (asFiniteNumber(settings?.scoopCarbsG) ?? DEFAULT_SCOOP_CARBS_G),
+  }
+}
+
+/** Scoops below 1 add nothing. Rates saved on the day win over current settings. */
+export function powderContribution(log: DailyLog | undefined, settings?: Settings): PowderRates {
+  const scoops = asFiniteNumber(log?.proteinScoops) ?? 0
+  if (scoops < 1) return { kcal: 0, proteinG: 0, carbsG: 0 }
+  const rates = powderRates(log, settings)
+  return {
+    kcal: scoops * rates.kcal,
+    proteinG: scoops * rates.proteinG,
+    carbsG: scoops * rates.carbsG,
+  }
+}
+
+function gram(value: number | undefined): number {
+  const n = asFiniteNumber(value)
+  return n != null && n >= 0 ? n : 0
+}
+
+export function totalCarbsG(log: DailyLog | undefined, settings?: Settings): number {
+  if (!log) return 0
+  return (
+    gram(log.breakfastCarbsG) +
+    gram(log.lunchCarbsG) +
+    gram(log.dinnerCarbsG) +
+    gram(log.extraCarbsG) +
+    powderContribution(log, settings).carbsG
+  )
+}
+
+export function totalProteinG(log: DailyLog | undefined, settings?: Settings): number {
+  if (!log) return 0
+  return (
+    gram(log.breakfastProteinG) +
+    gram(log.lunchProteinG) +
+    gram(log.dinnerProteinG) +
+    gram(log.extraProteinG) +
+    powderContribution(log, settings).proteinG
+  )
+}
+
+export function totalIntake(log: DailyLog | undefined, settings?: Settings): number | undefined {
   if (!log) return undefined
   const parts = [
     asFiniteNumber(log.breakfastKcal),
@@ -57,8 +113,9 @@ export function totalIntake(log: DailyLog | undefined): number | undefined {
     asFiniteNumber(log.dinnerKcal),
     asFiniteNumber(log.extraKcal),
   ]
-  if (parts.every((p) => p === undefined)) return undefined
-  return parts.reduce<number>((sum, n) => sum + (n ?? 0), 0)
+  const powder = powderContribution(log, settings).kcal
+  if (parts.every((p) => p === undefined) && powder <= 0) return undefined
+  return parts.reduce<number>((sum, n) => sum + (n ?? 0), 0) + powder
 }
 
 export function resolveBurn(
